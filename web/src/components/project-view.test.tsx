@@ -82,7 +82,10 @@ describe("ProjectView", () => {
     expect(screen.getByRole("heading", { name: "Choose a project" })).toBeInTheDocument();
     expect(screen.getByText("RNA pilot")).toBeInTheDocument();
     expect(screen.getByText("Current")).toBeInTheDocument();
-    expect(screen.getByText("$25 budget")).toBeInTheDocument();
+    // `projectBudgetLabel` formats with the *host* locale, so the currency
+    // string differs by machine ("$25" on en-US, "US$25" on zh-CN). Match the
+    // shape, not one machine's rendering.
+    expect(screen.getByText(/\$\s?25\s*budget/)).toBeInTheDocument();
     expect(screen.queryByText("Old study")).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /archived projects/i }));

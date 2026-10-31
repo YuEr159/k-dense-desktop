@@ -20,7 +20,7 @@
 import { useEffect } from "react";
 import zhCN from "./zh-CN.json";
 import { useLocale, type Locale } from "./locale";
-import { buildMatcher, translateSubtree, type Dictionary } from "./runtime-translate";
+import { buildMatcher, TRANSLATABLE_ATTRIBUTES, translateSubtree, type Dictionary } from "./runtime-translate";
 
 const DICTIONARIES: Partial<Record<Locale, Dictionary>> = {
   "zh-CN": zhCN as Dictionary,
@@ -69,6 +69,16 @@ export function LocaleProvider({ children }: { children: React.ReactNode }) {
             if (record.target.parentElement) apply(record.target.parentElement);
             continue;
           }
+          if (record.type === "attributes") {
+            // React rewrites these on every re-render, and several of them
+            // change on a timer or when a probe resolves (the resource pill,
+            // the cost pill, the model availability check). Without this the
+            // label translates once at mount and flips back to English on the
+            // next render. Re-applying is a no-op once the value is already
+            // Chinese, so the write this triggers settles immediately.
+            apply(record.target);
+            continue;
+          }
           for (const node of record.addedNodes) {
             // Defer: translating inside the callback mutates the DOM React is
             // still assembling, and React would then see its own text changed.
@@ -83,6 +93,8 @@ export function LocaleProvider({ children }: { children: React.ReactNode }) {
         childList: true,
         subtree: true,
         characterData: true,
+        attributes: true,
+        attributeFilter: [...TRANSLATABLE_ATTRIBUTES],
       });
 
       return () => observer.disconnect();

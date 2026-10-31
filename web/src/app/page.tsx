@@ -18,6 +18,7 @@ import { APP_VERSION, isVersioned, useUpdateCheck } from "@/lib/version";
 import { useSkills } from "@/lib/use-skills";
 import { flattenFiles, flattenFolders, useSandbox } from "@/lib/use-sandbox";
 import { ProjectScopeProvider } from "@/lib/projects";
+import { consumeScreenRestoreRequest } from "@/lib/i18n/locale";
 import {
   hasProjectActivity,
   sameProjectActivity,
@@ -148,8 +149,13 @@ export default function HomePage() {
         return;
       }
       setRestoredProjects(snapshot.projects);
-      // Always start in the project overview. A project's saved workspace is
-      // restored lazily only after the user chooses that project.
+      // Reopening the screen is reserved for the reload a language switch
+      // triggers (see lib/i18n/locale.ts): that reload must not read as losing
+      // your place. A normal launch or refresh still starts on the overview.
+      if (consumeScreenRestoreRequest() && snapshot.openedProjectIds.length > 0) {
+        setOpenedProjectIds(snapshot.openedProjectIds);
+        setScreen("workspace");
+      }
       setWorkspaceHydrated(true);
     });
     return () => {

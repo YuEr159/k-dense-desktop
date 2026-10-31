@@ -185,6 +185,25 @@ describe("translateSubtree", () => {
     // A block child means these are different sentences; nothing is rewritten.
     expect(host.textContent).toBe("oneand more");
   });
+
+  it("translates a text field's placeholder but never its content", () => {
+    // The composer is a `<textarea>`, which the walker rejects wholesale so
+    // the user's typed text is never rewritten. The placeholder is UI copy,
+    // not user data, and would otherwise stay English forever.
+    const local = buildMatcher({
+      "Ask Kady anything…": "向 Kady 提问…",
+      "typed text": "输入的文字",
+    });
+    const host = document.createElement("div");
+    host.innerHTML =
+      '<textarea placeholder="Ask Kady anything…">typed text</textarea>';
+    const field = host.querySelector("textarea")!;
+
+    apply(translateSubtree(host, local, noSkip));
+
+    expect(field.getAttribute("placeholder")).toBe("向 Kady 提问…");
+    expect(field.value).toBe("typed text");
+  });
 });
 
 describe("buildMatcher", () => {

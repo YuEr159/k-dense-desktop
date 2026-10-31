@@ -21,6 +21,16 @@ export const LOCALES: { id: Locale; label: string; native: string }[] = [
 const STORAGE_KEY = "kady:locale";
 const EVENT = "kady:locale";
 
+/**
+ * Set just before a language switch reloads the page.
+ *
+ * The app deliberately starts on the project overview after a refresh. The
+ * reload in `writeLocale` is not a refresh the user asked for — it is how the
+ * switch takes effect — so it carries this marker to ask the shell to reopen
+ * the project it was showing.
+ */
+const RESTORE_SCREEN_KEY = "kady:locale:restore-screen";
+
 /** Chinese when the browser prefers it, since that is the shipped dictionary. */
 export function detectLocale(): Locale {
   if (typeof navigator === "undefined") return "zh-CN";
@@ -42,6 +52,9 @@ export function readLocale(): Locale {
 export function writeLocale(locale: Locale): void {
   try {
     localStorage.setItem(STORAGE_KEY, locale);
+    // Read once and cleared by the shell on the next mount, so it can only
+    // ever affect the reload this call is about to trigger.
+    localStorage.setItem(RESTORE_SCREEN_KEY, "1");
   } catch {
     // A failed write only means the choice does not survive a reload.
   }
@@ -52,6 +65,25 @@ export function writeLocale(locale: Locale): void {
   // nothing the user cares about is lost.
   if (typeof location !== "undefined") location.reload();
 }
+
+/**
+ * Whether the page is loading because the language changed, clearing the
+ * marker so exactly one load sees it.
+ *
+ * Deliberately one-shot: a plain refresh, a new browser tab or a restart all
+ * keep the app's normal "start on the overview" behaviour.
+ */
+export function consumeScreenRestoreRequest(): boolean {
+  if (typeof localStorage === "undefined") return false;
+  try {
+    if (localStorage.getItem(RESTORE_SCREEN_KEY) !== "1") return false;
+    localStorage.removeItem(RESTORE_SCREEN_KEY);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 
 /** Subscribe to the shared locale, with instant updates across components. */
 export function useLocale(): [Locale, (next: Locale) => void] {

@@ -44,7 +44,7 @@ const SKIP_TAGS = new Set([
   "TEXTAREA",
 ]);
 
-const TRANSLATABLE_ATTRIBUTES = ["placeholder", "title", "aria-label", "alt"] as const;
+export const TRANSLATABLE_ATTRIBUTES = ["placeholder", "title", "aria-label", "alt"] as const;
 
 /** Elements under which no rewriting happens at all. */
 const SKIP_SELECTOR = "[data-no-translate]";
@@ -237,6 +237,23 @@ export function translateSubtree(
       if (!value) continue;
       const translated = translateText(matcher, value);
       if (translated !== value) element.setAttribute(attribute, translated);
+    }
+  }
+
+  // The walker rejects a skipped tag together with its subtree, so a
+  // `<textarea>` never reaches `elements` above. Its *content* is user data and
+  // must stay untouched, but its placeholder — the composer's prompt text — is
+  // UI copy and would otherwise never be translated.
+  if (root.nodeType === Node.ELEMENT_NODE || root.nodeType === Node.DOCUMENT_NODE) {
+    const skipped = (root as Element | Document).querySelectorAll([...SKIP_TAGS].join(","));
+    for (const element of skipped) {
+      if (element.closest(SKIP_SELECTOR)) continue;
+      for (const attribute of TRANSLATABLE_ATTRIBUTES) {
+        const value = element.getAttribute(attribute);
+        if (!value) continue;
+        const translated = translateText(matcher, value);
+        if (translated !== value) element.setAttribute(attribute, translated);
+      }
     }
   }
 
