@@ -32,8 +32,9 @@ const MINGIT = {
   // bash.exe, and bash is the binary Pi's tool layer spawns.
   // The asset is a 7z self-extractor; it accepts `-o<dir> -y` to unpack
   // silently, which keeps this dependency-free.
-  url: "https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.1/PortableGit-2.56.0.4-64-bit.7z.exe",
+  url: "https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.4/PortableGit-2.56.0.4-64-bit.7z.exe",
   mirrors: [
+    "https://mirrors.tuna.tsinghua.edu.cn/github-release/git-for-windows/git/v2.56.0.windows.4/PortableGit-2.56.0.4-64-bit.7z.exe",
     "https://mirrors.tuna.tsinghua.edu.cn/github-release/git-for-windows/git/LatestRelease/PortableGit-2.56.0.4-64-bit.7z.exe",
   ],
   name: "portablegit.7z.exe",
@@ -45,52 +46,77 @@ const MINGIT = {
     fs.mkdirSync(destDir, { recursive: true });
     const res = spawnSync(file, [`-o${destDir}`, "-y"], { stdio: "inherit" });
     if (res.status !== 0) throw new Error(`PortableGit self-extract failed: ${res.status}`);
-    // PortableGit unpacks ~408 MB. The agent needs bash and git, nothing else;
-    // the GUI toolchain, editor data and Perl/Mintty assets account for most of
+    // PortableGit unpacks ~340 MB. The agent needs bash and git, nothing else;
+    // the GUI toolchain, editor data and Perl/Mintty assets account for much of
     // it. Keep what `usr/bin/bash.exe` links against and drop the rest.
-    for (const rel of PRUNE_FROM_GIT) {
+    for (const rel of pruneList(destDir)) {
       fs.rmSync(path.join(destDir, rel), { recursive: true, force: true });
     }
-    // Pruning removes `etc`, which clears MSYS_TMP_DIR-style hints; recreate
-    // the scratch directories bash needs. A keep-file is required because
-    // packagers do not carry empty directories.
-    for (const rel of MSYS_RUNTIME_DIRS) {
-      const dir = path.join(destDir, rel);
-      fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(path.join(dir, ".keep"), "");
+    // The bin/ and cmd/ shims resolve through the MinGW tree and usr; they only
+    // work when the trees they point at exist, so verify the real executables.
+    const mingw = mingwDir(destDir);
+    for (const rel of ["usr/bin/bash.exe", `${mingw}/bin/git.exe`]) {
+      if (!fs.existsSync(path.join(destDir, rel))) {
+        throw new Error(`PortableGit is missing ${rel} after pruning`);
+      }
     }
   },
 };
 
 /**
- * Paths inside PortableGit that Kady never uses. Verified by running bash and
- * git after removal: shell builtins, pipelines, redirection, and `git --version`
- * all still work.
+ * PortableGit 2.56 moved the toolchain from `mingw64` to `ucrt64`; older
+ * archives still use `mingw64`. Detect rather than pin, so a version bump does
+ * not silently break the bundle.
  */
-const PRUNE_FROM_GIT = [
-  "mingw64",          // GUI/toolchain tree (largest single item)
-  "usr/share/vim",    // editor runtime
-  "usr/share/perl5",  // git's Perl scripts are unused by the agent
-  "usr/share/misc",
-  "usr/share/mintty",
-  "usr/share/pki",
-  "usr/share/git-core/templates",
-  "usr/share/doc",
-  "usr/lib/perl5",
-  "etc",              // shell/ssh defaults are regenerated as needed
-  "dev",
-  "ReleaseNotes.html",
-  "unins000.dat",
-  "unins000.exe",
-  "unins000.msg",
-];
+function mingwDir(root) {
+  for (const name of ["ucrt64", "mingw64"]) {
+    if (fs.existsSync(path.join(root, name, "bin", "git.exe"))) return name;
+  }
+  throw new Error("PortableGit has neither ucrt64/bin/git.exe nor mingw64/bin/git.exe");
+}
 
 /**
- * Directories MSYS bash expects to exist. "tmp" in particular is where shells
- * put here-documents and command substitution output; without it every bash
- * invocation prints "could not find /tmp" and some tooling degrades.
+ * Paths inside PortableGit that Kady never uses.
+ *
+ * The MinGW toolchain tree itself (`ucrt64/` or `mingw64/`) is NOT here: that
+ * is git (git.exe plus the DLLs it links) and `libexec/git-core/`, which holds
+ * the subcommands `git clone` shells out to. Dropping it leaves
+ * `git: command not found`. What goes is the editor, the GUI history browsers,
+ * the manual pages and the Vim/Perl runtime that only those tools need.
  */
-const MSYS_RUNTIME_DIRS = ["tmp", "var/tmp"];
+function pruneList(root) {
+  const mingw = mingwDir(root);
+  return [
+    "usr/share/vim", // editor runtime, ~23 MB of ex/vi/view aliases
+    "usr/share/mintty", // terminal emulator for the GUI launchers
+    "usr/share/doc",
+    "usr/share/man",
+    "usr/share/git-gui",
+    "usr/share/gitk",
+    "usr/share/perl5",
+    "usr/lib/perl5",
+    `${mingw}/share/doc`,
+    `${mingw}/share/man`,
+    `${mingw}/share/git-gui`,
+    `${mingw}/share/gitk`,
+    `${mingw}/doc`,
+    `${mingw}/libexec/git-core/git-gui.exe`,
+    `${mingw}/libexec/git-core/gitk.exe`,
+    `${mingw}/libexec/git-core/git-gui`,
+    `${mingw}/libexec/git-core/gitk`,
+    `${mingw}/bin/git-gui.exe`,
+    `${mingw}/bin/gitk.exe`,
+    `${mingw}/bin/gitk`,
+    `${mingw}/bin/wish.exe`,
+    "git-bash.exe",
+    "git-cmd.exe",
+    "post-install.bat",
+    "ReleaseNotes.html",
+    "unins000.dat",
+    "unins000.exe",
+    "unins000.msg",
+  ];
+}
 
 const UV = {
   version: "0.12.13",

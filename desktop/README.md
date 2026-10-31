@@ -41,6 +41,7 @@ cd desktop && npm start
 ```bash
 node desktop/scripts/build-runtime.mjs
 node desktop/scripts/fetch-externals.mjs
+node desktop/scripts/verify-externals.mjs   # 只留捆绑目录的 PATH，验证自足性
 cd desktop && KADY_RUNTIME_DIR=./build/runtime npm start
 ```
 
@@ -99,7 +100,11 @@ Pi 的 `getShellConfig()` 解析顺序是：`settings.json` 的 `shellPath` → 
 
 **MinGit 不含 `bash.exe`**（只有 `git.exe` 和 `dash.exe`），而 bash 正是 agent 执行命令的核心。必须用 PortableGit。
 
-PortableGit 完整解压 408 MB，裁剪掉 `mingw64`（GUI 工具链）、`vim`、`perl5`、`mintty` 等后降到 **103 MB**，bash/git/管道/重定向全部验证可用。
+PortableGit 2.56 完整解压 342 MB。裁剪掉 vim、mintty、man/doc、git-gui/gitk 后约 **299 MB**。
+
+> **`ucrt64/` 和 `mingw64/` 必须保留**：那是 git 本体（`git.exe` 及其链接的 DLL）和 `libexec/git-core/`（`git clone` 等子命令的实现）。早期版本曾把整个 `mingw64/` 当成"GUI 工具链"删掉，结果 `git: command not found`，而且因为本机装了系统 Git 而看不出问题。`scripts/verify-externals.mjs` 用只含捆绑目录的 PATH 验证，专门堵这个洞。
+
+PortableGit 2.56 把工具链从 `mingw64/` 移到了 `ucrt64/`；脚本按存在性探测两者，版本升级不会静默失效。
 
 ### 保持 `KADY_RUNTIME_DIR` escape hatch
 
@@ -109,8 +114,8 @@ PortableGit 完整解压 408 MB，裁剪掉 `mingw64`（GUI 工具链）、`vim`
 
 | 组件 | 来源 | 体积 |
 |---|---|---|
-| PortableGit 2.56（裁剪后） | 清华镜像 | 103 MB |
-| uv 0.12.13 | PyPI wheel（含 SHA-256 校验） | 39.6 MB |
+| PortableGit 2.56.0.4（裁剪后） | GitHub / 清华镜像 | 299 MB |
+| uv 0.12.13 | PyPI wheel（含 SHA-256 校验） | 40 MB |
 
 两者都固定版本并记录来源。下载脚本优先走 GitHub，失败时自动回落镜像（本机实测 GitHub 直连超时）。
 
@@ -122,7 +127,9 @@ PortableGit 完整解压 408 MB，裁剪掉 `mingw64`（GUI 工具链）、`vim`
 | 载荷独立启动 | `/health` 200、`/projects` 200 |
 | Electron + 载荷（开发） | 窗口正常，UI 200 |
 | **打包后 `Kady.exe`** | 窗口标题正常，`/health` 200，UI 200 |
-| 捆绑 bash 执行命令 | `BUNDLED_BASH_OK`、`git 2.54`、`uv 0.12.13`，exit 0 |
+| 捆绑 bash 执行命令 | `BUNDLED_BASH_OK`、`git 2.56`、`uv 0.12.13`，exit 0 |
+| **隔离 PATH 验证** | 10 项全通过：bash / git / uv / 管道 / heredoc / git init / HTTPS clone，`git` 解析在捆绑目录内 |
+| **打包版联网** | 在安装目录的 `externals/git` 上重跑隔离验证全过，`git ls-remote` 成功返回远端分支 |
 | `shellPath` 写入 | 正确指向安装目录的 bash |
 | 数据目录 | `%APPDATA%/Kady/data/` |
 | `/tmp` 可用 | 临时文件读写正常 |
@@ -142,7 +149,7 @@ PortableGit 完整解压 408 MB，裁剪掉 `mingw64`（GUI 工具链）、`vim`
 - **代码签名**：`signExecutable: false`，Windows 会弹 SmartScreen 警告
 - **自动更新**：上游 release 无二进制产物，需自建版本端点（参考 DSH Desktop 的做法）
 - **首次启动的 Python 环境**：`uv sync` 会构建两个 venv（沙箱 + 预览 helper），耗时数分钟且需联网
-- **技能库**：默认 `git clone` 约 460 MB
+- **技能库的网络依赖**：`skills` CLI 每次同步都重新 `git clone` 上游仓库（460 MB），网络不稳时会报 `SSL/TLS handshake` 或 `invalid index-pack output`。系统 Git 用同样命令也会失败，不是捆绑版的问题。已抓取过的缓存落在 `%TEMP%/kady-desk-skills/`，但 CLI 不复用它
 - **macOS / Linux**：配置已写，未验证；无 `externals` 捆绑（依赖系统 bash）
 
 ## 与 DSH Desktop 的对照

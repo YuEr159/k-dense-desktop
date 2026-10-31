@@ -89,10 +89,19 @@ function commonEnv(dataRoot, modelsCatalogue, externalsDir) {
   if (modelsCatalogue) env.KADY_MODELS_CATALOGUE = modelsCatalogue;
 
   if (externalsDir) {
-    const gitBin = path.join(externalsDir, "git", "cmd");
-    const gitUsrBin = path.join(externalsDir, "git", "usr", "bin");
+    const gitRoot = path.join(externalsDir, "git");
+    // PortableGit 2.56 ships the toolchain as ucrt64/; older archives use
+    // mingw64/. Both put the real git.exe there and a shim under cmd/.
+    const mingw = ["ucrt64", "mingw64"].find((name) =>
+      fs.existsSync(path.join(gitRoot, name, "bin", "git.exe")),
+    );
+    const gitBin = path.join(gitRoot, "cmd");
+    const gitUsrBin = path.join(gitRoot, "usr", "bin");
     const uvBin = path.join(externalsDir, "uv");
-    const parts = [gitBin, gitUsrBin, uvBin].filter((p) => fs.existsSync(p));
+    // The MinGW bin carries the DLLs git.exe links; cmd/ and usr/bin carry the
+    // shims and bash. All three go on PATH ahead of the user's own tools.
+    const mingwBin = mingw ? path.join(gitRoot, mingw, "bin") : null;
+    const parts = [gitBin, gitUsrBin, mingwBin, uvBin].filter((p) => p && fs.existsSync(p));
     if (parts.length) {
       env.PATH = [...parts, process.env.PATH ?? ""].join(path.delimiter);
       // Kady looks for uv on PATH first, then ~/.local/bin; putting the bundled
