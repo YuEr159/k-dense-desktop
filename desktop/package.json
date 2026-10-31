@@ -3,13 +3,17 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Electron shell for K-Dense BYOK (stage 0)",
+  "description": "Electron desktop shell for K-Dense BYOK",
   "main": "main.mjs",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "build:runtime": "node scripts/build-runtime.mjs",
+    "build:externals": "node scripts/fetch-externals.mjs",
+    "dist": "npm run build:runtime && npm run build:externals && electron-builder --config electron-builder.json --win"
   },
   "devDependencies": {
-    "electron": "^45.2.1"
+    "electron": "^45.2.1",
+    "electron-builder": "^26.18.0"
   },
   "dependencies": {
     "esbuild": "^0.28.2"

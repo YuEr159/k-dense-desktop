@@ -1,0 +1,42 @@
+{
+  "appId": "ai.kdense.kady.desktop",
+  "productName": "Kady",
+  "copyright": "MIT licensed. Based on K-Dense BYOK by K-Dense Inc.",
+  "directories": {
+    "output": "../dist",
+    "buildResources": "resources"
+  },
+  "files": [
+    "main.mjs",
+    "service-manager.mjs",
+    "preflight.mjs",
+    "package.json"
+  ],
+  "extraResources": [
+    { "from": "build/runtime", "to": "runtime" },
+    { "from": "build/externals", "to": "externals" }
+  ],
+  "win": {
+    "target": [{ "target": "nsis", "arch": ["x64"] }],
+    "artifactName": "Kady-${version}-${arch}-Setup.${ext}",
+    "signExecutable": false
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "perMachine": false,
+    "differentialPackage": false,
+    "deleteAppDataOnUninstall": false,
+    "runAfterFinish": true
+  },
+  "mac": {
+    "target": [{ "target": "dmg", "arch": ["arm64", "x64"] }],
+    "category": "public.app-category.productivity"
+  },
+  "linux": {
+    "target": ["AppImage"],
+    "category": "Science"
+  },
+  "asar": true,
+  "asarUnpack": ["**/*.node", "**/node_modules/**"]
+}

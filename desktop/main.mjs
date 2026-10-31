@@ -11,12 +11,19 @@
  * build expects.
  */
 import { app, BrowserWindow, dialog, shell } from "electron";
+import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
 import { UI_URL, packagedArtifacts, setFatalHandler, startServices, stopServices } from "./service-manager.mjs";
+import { checkRuntime } from "./preflight.mjs";
 
 const isDev = !app.isPackaged;
+
+// Electron derives app.getPath("userData") from the package name, which is
+// "kady-desktop" while the product is "Kady". Pin the name so a packaged app
+// and a checkout agree on where user data lives.
+app.setName("Kady");
 
 /** Keep one window; re-focusing the dock/taskbar icon should not spawn more. */
 let mainWindow = null;
@@ -38,15 +45,17 @@ function dataRoot() {
  */
 function runtimeArtifacts() {
   if (process.env.KADY_RUNTIME_DIR) {
+    // KADY_RUNTIME_DIR names the payload itself (…/build/runtime), while
+    // packagedArtifacts expects the parent that contains runtime/ and
+    // externals/ side by side.
     const dir = path.resolve(process.env.KADY_RUNTIME_DIR);
-    return packagedArtifactsFrom(dir) ?? {};
+    const parent = path.dirname(dir);
+    const artifacts = packagedArtifacts(parent);
+    if (!artifacts) return {};
+    const externals = path.join(parent, "externals");
+    return fs.existsSync(externals) ? { ...artifacts, externalsDir: externals } : artifacts;
   }
   return packagedArtifacts(process.resourcesPath) ?? {};
-}
-
-function packagedArtifactsFrom(dir) {
-  // Same layout as resources/runtime, rooted at an explicit directory.
-  return packagedArtifacts(dir);
 }
 
 function createWindow() {
@@ -106,7 +115,25 @@ function isInternalUrl(rawUrl) {
 
 async function boot() {
   const window = createWindow();
+  const artifacts = runtimeArtifacts();
 
+  // Fail on a missing shell before the window opens: without one, every agent
+  // tool call fails with an error the user cannot act on.
+  const { blocking, warnings } = checkRuntime(artifacts);
+  if (blocking.length) {
+    await dialog.showMessageBox({
+      type: "error",
+      title: "K-Dense BYOK cannot start",
+      message: "A required component is missing.",
+      detail: blocking.join("\n\n"),
+    });
+    quitting = true;
+    app.quit();
+    return;
+  }
+  if (warnings.length) {
+    console.warn(warnings.join("\n"));
+  }
   // Show a lightweight placeholder while the services come up; the first
   // `next start` can take a few seconds even with a warm build.
   await window.loadURL(
@@ -126,7 +153,7 @@ async function boot() {
 
   const ready = await startServices({
     dataRoot: dataRoot(),
-    ...runtimeArtifacts(),
+    ...artifacts,
   });
   if (quitting) return;
 

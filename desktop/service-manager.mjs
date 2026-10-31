@@ -74,17 +74,89 @@ function spawnService(label, file, args, cwd, env) {
 /**
  * Environment shared by both services. `dataRoot` is where every writable
  * path lands: `.env` with saved API keys and `projects/` with user data.
+ *
+ * `externalsDir` holds the binaries we ship (MinGit's bash + git, uv). They go
+ * on PATH ahead of anything the user has, and Pi is told explicitly which bash
+ * to use -- a missing bash.exe breaks every agent tool call, so this must not
+ * depend on the user's PATH.
  */
-function commonEnv(dataRoot, modelsCatalogue) {
+function commonEnv(dataRoot, modelsCatalogue, externalsDir) {
   const env = {
     KADY_DATA_ROOT: dataRoot,
     KADY_PORT: String(BACKEND_PORT),
     KADY_FRONTEND_PORT: String(FRONTEND_PORT),
   };
-  // A packaged build ships models.json as an asset; a source checkout reads
-  // it straight out of web/src/data.
   if (modelsCatalogue) env.KADY_MODELS_CATALOGUE = modelsCatalogue;
+
+  if (externalsDir) {
+    const gitBin = path.join(externalsDir, "git", "cmd");
+    const gitUsrBin = path.join(externalsDir, "git", "usr", "bin");
+    const uvBin = path.join(externalsDir, "uv");
+    const parts = [gitBin, gitUsrBin, uvBin].filter((p) => fs.existsSync(p));
+    if (parts.length) {
+      env.PATH = [...parts, process.env.PATH ?? ""].join(path.delimiter);
+      // Kady looks for uv on PATH first, then ~/.local/bin; putting the bundled
+      // copy on PATH is enough, but this makes the intent explicit.
+      const uvExe = path.join(uvBin, "uv.exe");
+      if (fs.existsSync(uvExe)) env.UV = uvExe;
+    }
+    // Pi resolves bash as: settings.shellPath, then Program Files\Git, then
+    // PATH (see getShellConfig in pi-coding-agent). Writing shellPath into the
+    // shared agent settings is what makes the bundled bash win over an old
+    // system Git -- a wrong bash here breaks every agent tool call.
+    const bashExe = path.join(externalsDir, "git", "usr", "bin", "bash.exe");
+    if (fs.existsSync(bashExe)) configureShellPath(env, bashExe);
+  }
   return env;
+}
+
+/**
+ * Point Pi at a specific bash via its own settings file. Existing user
+ * settings are preserved: the key is only added when absent, and an
+ * unparseable file is left untouched.
+ *
+ * Kady's backend resolves its agent directory in env.ts from
+ * PI_CODING_AGENT_DIR / KADY_PI_AGENT_DIR, defaulting to ~/.kady/pi-agent.
+ * The same resolution is repeated here so the settings land where the backend
+ * will look for them.
+ */
+function configureShellPath(env, bashExe) {
+  const home = process.env.USERPROFILE || process.env.HOME || "";
+  let configured =
+    env.PI_CODING_AGENT_DIR?.trim() ||
+    env.KADY_PI_AGENT_DIR?.trim() ||
+    path.join(home, ".kady", "pi-agent");
+  // Expand a leading ~ the way Kady's env.ts does.
+  if (configured === "~") configured = home;
+  else if (configured.startsWith("~/") || configured.startsWith("~\\")) {
+    configured = path.join(home, configured.slice(2));
+  }
+  const agentDir = path.resolve(configured);
+  const settingsPath = path.join(agentDir, "settings.json");
+  try {
+    let settings = {};
+    if (fs.existsSync(settingsPath)) {
+      const parsed = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+      if (typeof parsed !== "object" || parsed === null) return;
+      settings = parsed;
+      if (settings.shellPath === bashExe) return; // already ours
+      // Keep a shellPath the user chose -- unless it points somewhere that no
+      // longer exists, which is what a moved/reinstalled app leaves behind.
+      if (typeof settings.shellPath === "string" && settings.shellPath.trim()) {
+        if (fs.existsSync(settings.shellPath)) return;
+        console.log(`[shell] replacing stale shellPath: ${settings.shellPath}`);
+      }
+    }
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({ ...settings, shellPath: bashExe }, null, 2) + "\n",
+    );
+    console.log(`[shell] pinned bash for the agent: ${bashExe}`);
+  } catch (error) {
+    // Never block startup on this: Pi falls back to its own discovery.
+    console.warn(`[shell] could not record shellPath: ${error.message}`);
+  }
 }
 
 /**
@@ -102,6 +174,7 @@ export function packagedArtifacts(resourcesPath) {
     backendBundle: backendEntry,
     standaloneDir,
     modelsCatalogue: path.join(runtime, "models.json"),
+    externalsDir: path.join(resourcesPath, "externals"),
   };
 }
 
@@ -162,13 +235,20 @@ async function waitFor(url, label, timeoutMs) {
 /**
  * @param {object} options
  * @param {string} options.dataRoot  writable state directory
- * @param {string} [options.backendBundle]  prebuilt backend entry (packaged)
+ * @param {string} [options.externalsDir]  bundled bash/git/uv (packaged)
+ * @param {string} [options.backendBundle]  compiled backend entry (packaged)
  * @param {string} [options.standaloneDir]  Next standalone dir (packaged)
  * @param {string} [options.modelsCatalogue]  models.json path (packaged)
  */
-export async function startServices({ dataRoot, backendBundle, standaloneDir, modelsCatalogue }) {
+export async function startServices({
+  dataRoot,
+  externalsDir,
+  backendBundle,
+  standaloneDir,
+  modelsCatalogue,
+}) {
   fs.mkdirSync(dataRoot, { recursive: true });
-  const env = commonEnv(dataRoot, modelsCatalogue);
+  const env = commonEnv(dataRoot, modelsCatalogue, externalsDir);
 
   if (backendBundle && standaloneDir) {
     startBackendFromBundle(backendBundle, env);

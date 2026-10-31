@@ -32,7 +32,18 @@ const serverOut = path.join(outDir, "server");
 const webOut = path.join(outDir, "web");
 
 function rmrf(dir) {
-  fs.rmSync(dir, { recursive: true, force: true });
+  // Windows keeps handles open a moment after a process exits; a silent
+  // failure here leaves the previous tree in place and the new payload merges
+  // into it, which is how a stale .venv once shipped.
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 500 });
+      return;
+    } catch (error) {
+      if (attempt === 4) throw new Error(`could not clear ${dir}: ${error.message}`);
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000);
+    }
+  }
 }
 
 function copyDir(from, to, options = {}) {
@@ -339,6 +350,14 @@ async function main() {
   await buildBackend();
   buildFrontend();
   copyModelsCatalogue();
+
+  // Guard against the failure mode where a stale per-machine environment is
+  // carried into the payload: it is hundreds of MB and must be rebuilt by
+  // `uv sync` on the user's machine instead.
+  const venv = path.join(serverOut, "src", "helpers", ".venv");
+  if (fs.existsSync(venv)) {
+    throw new Error(`refusing to ship a Python environment: ${venv}`);
+  }
 
   console.log(`Done. server ${dirSize(serverOut)} MB, web ${dirSize(webOut)} MB`);
 }
