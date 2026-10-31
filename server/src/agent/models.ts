@@ -26,7 +26,7 @@ import { getBuiltinModelDataGeneratedAt } from "@earendil-works/pi-ai/providers/
 import {
   DEFAULT_MODEL_ID,
   DEFAULT_MODEL_PROVIDER,
-  REPO_ROOT,
+  MODELS_CATALOGUE_PATH,
   ollamaBaseUrl,
   openaiCompatibleBaseUrl,
 } from "../config.ts";
@@ -41,7 +41,7 @@ import { canonicalProviderId, directProvider, isDirectProvider } from "./provide
 // "vendor/model" ids and Bearer auth as OpenRouter.
 const OPENROUTER_BASE_URL =
   process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1";
-const CATALOGUE_PATH = path.join(REPO_ROOT, "web", "src", "data", "models.json");
+const CATALOGUE_PATH = MODELS_CATALOGUE_PATH;
 
 interface CatalogueEntry {
   contextWindow: number;

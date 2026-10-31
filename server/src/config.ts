@@ -15,11 +15,36 @@ const __dirname = path.dirname(__filename);
 /** Repo root = parent of `server/`. */
 export const REPO_ROOT = path.resolve(__dirname, "..", "..");
 
+/**
+ * Directory the desktop shell can point at instead of REPO_ROOT.
+ *
+ * A packaged build keeps the app code read-only (installed under Program Files
+ * or inside an asar) while the things it writes -- `.env`, `projects/` -- have
+ * to live somewhere the user can write. KADY_DATA_ROOT names that directory;
+ * an unset value keeps the source-checkout behaviour below unchanged.
+ */
+export const DATA_ROOT = path.resolve(
+  process.env.KADY_DATA_ROOT ? process.env.KADY_DATA_ROOT : REPO_ROOT,
+);
+
 /** Root that holds every project directory. Overridable for tests. */
 export const PROJECTS_ROOT = path.resolve(
   process.env.KADY_PROJECTS_ROOT
     ? process.env.KADY_PROJECTS_ROOT
-    : path.join(REPO_ROOT, "projects"),
+    : path.join(DATA_ROOT, "projects"),
+);
+
+/**
+ * Model price/capability catalogue read at runtime by agent/models.ts.
+ *
+ * Normally the repo's `web/src/data/models.json`. A packaged build ships it as
+ * an asset next to the backend bundle, so the path is overridable rather than
+ * derived from REPO_ROOT.
+ */
+export const MODELS_CATALOGUE_PATH = path.resolve(
+  process.env.KADY_MODELS_CATALOGUE
+    ? process.env.KADY_MODELS_CATALOGUE
+    : path.join(REPO_ROOT, "web", "src", "data", "models.json"),
 );
 
 /** App-scoped Pi configuration/auth directory, established by env.ts. */

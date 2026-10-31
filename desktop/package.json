@@ -1,0 +1,17 @@
+{
+  "name": "kady-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Electron shell for K-Dense BYOK (stage 0)",
+  "main": "main.mjs",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^45.2.1"
+  },
+  "dependencies": {
+    "esbuild": "^0.28.2"
+  }
+}

@@ -37,7 +37,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { REPO_ROOT } from "../config.ts";
+import { DATA_ROOT } from "../config.ts";
 import { getModelRuntime } from "../agent/session-registry.ts";
 import { registerLocalProviders } from "../agent/models.ts";
 import {
@@ -54,7 +54,7 @@ import {
 import { modalJobManager } from "../modal/manager.ts";
 import { notebookRobustness } from "../agent/notebook-robustness.ts";
 
-const ENV_PATH = path.join(REPO_ROOT, ".env");
+const ENV_PATH = path.join(DATA_ROOT, ".env");
 let credentialEnvPath = ENV_PATH;
 
 interface ManagedKey {

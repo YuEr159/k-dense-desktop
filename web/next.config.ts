@@ -19,6 +19,7 @@ function readAppVersion(): string {
 
 const nextConfig: NextConfig = {
   devIndicators: false,
+  output: "standalone",
   async headers() {
     return [{ source: "/office/:path*", headers: [
       { key: "Cross-Origin-Opener-Policy", value: "same-origin" },

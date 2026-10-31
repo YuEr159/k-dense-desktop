@@ -15,9 +15,13 @@ import { applyEnvFile } from "../../env-file.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..", "..");
+// Matches DATA_ROOT in config.ts: a packaged build writes its .env here, not
+// into the (read-only) install directory. Read before config.ts is imported.
+const dataRoot = path.resolve(process.env.KADY_DATA_ROOT || repoRoot);
 
 // Later files do not override earlier ones (existing env always wins), so
 // order is just discovery preference.
+applyEnvFile(path.join(dataRoot, ".env"));
 applyEnvFile(path.join(repoRoot, ".env"));
 applyEnvFile(path.join(repoRoot, "kady_agent", ".env"));
 applyEnvFile(path.join(repoRoot, "server", ".env"));
