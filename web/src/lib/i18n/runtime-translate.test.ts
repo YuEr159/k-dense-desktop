@@ -157,6 +157,34 @@ describe("translateSubtree", () => {
     apply(translateSubtree(host, local, noSkip));
     expect(host.textContent).toBe("$40.00 输入 / $200.00 输出");
   });
+
+  it("matches across inline markup and keeps the element", () => {
+    // `<kbd>.env</kbd>` splits the sentence into three nodes; the filename must
+    // survive the translation with its styling intact.
+    const local = buildMatcher({
+      "keys from your {0} file and run on your machine.":
+        "使用来自你本机 {0} 文件的密钥，并在你的机器上运行。",
+    });
+    const host = document.createElement("div");
+    host.innerHTML =
+      "<p>keys from your <kbd>.env</kbd> file and run on your machine.</p>";
+
+    apply(translateSubtree(host, local, noSkip));
+
+    const p = host.querySelector("p")!;
+    expect(p.textContent).toBe("使用来自你本机 .env 文件的密钥，并在你的机器上运行。");
+    expect(p.querySelector("kbd")).not.toBeNull();
+    expect(p.querySelector("kbd")!.textContent).toBe(".env");
+  });
+
+  it("refuses to join across a block element", () => {
+    const local = buildMatcher({ "{0} and more": "{0} 及更多" });
+    const host = document.createElement("div");
+    host.innerHTML = "<p><span>one</span><div>and more</div></p>";
+    apply(translateSubtree(host, local, noSkip));
+    // A block child means these are different sentences; nothing is rewritten.
+    expect(host.textContent).toBe("oneand more");
+  });
 });
 
 describe("buildMatcher", () => {

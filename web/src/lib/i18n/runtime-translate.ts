@@ -199,18 +199,29 @@ export function translateSubtree(
     // text nodes — one per interpolation — so no single node ever holds the
     // sentence a `{0}` template describes. When an element's visible content is
     // entirely text, try the whole string and replace the run in place.
+    //
+    // Inline markup is flattened for the *match* but preserved on replacement:
+    // `keys from your <kbd>.env</kbd> file and run on your machine` must match
+    // as one sentence, and the `<kbd>` must survive so the filename keeps its
+    // styling.
     const parts = [...element.childNodes];
     if (parts.length < 2) continue;
-    if (parts.some((child) => child.nodeType !== Node.TEXT_NODE)) continue;
 
-    const whole = parts.map((child) => child.nodeValue ?? "").join("");
-    const translated = translateText(matcher, whole);
-    if (translated === whole) continue;
+    const inline = flattenInline(element);
+    if (!inline) continue;
 
-    // Collapse the run into a single node. React re-renders the element from
-    // its own model on the next update, which restores the separate nodes.
-    for (const child of parts) merged.add(child as Text);
-    element.textContent = translated;
+    const translated = translateText(matcher, inline.text);
+    if (translated === inline.text) continue;
+
+    const rebuilt = rebuildPreservingInline(element, inline, translated);
+    if (rebuilt) continue;
+
+    // No inline markup: collapse the pure-text run into one node. React
+    // re-renders from its own model on the next update, restoring the parts.
+    if (!inline.hasMarkup) {
+      for (const child of parts) merged.add(child as Text);
+      element.textContent = translated;
+    }
   }
 
   for (const textNode of textNodes) {
@@ -230,6 +241,95 @@ export function translateSubtree(
   }
 
   return plan;
+}
+
+/** Tags that read as part of the surrounding sentence, not as a block break. */
+const INLINE_TAGS = new Set(["KBD", "CODE", "STRONG", "EM", "B", "I", "U", "S", "SPAN", "A", "MARK", "SMALL", "SUP", "SUB"]);
+
+/**
+ * Flatten an element's inline content into one string for matching.
+ *
+ * Returns `null` when the element contains anything that is not text or inline
+ * markup — a block child (`<div>`, `<ul>`) is a different sentence, and joining
+ * across it would match one sentence against two.
+ *
+ * Each inline element is recorded so a replacement can put it back. The
+ * dictionary key carries a `{n}` where each inline element sat, which lets the
+ * translation move them (Chinese word order often puts the filename first).
+ */
+function flattenInline(element: Element): {
+  text: string;
+  hasMarkup: boolean;
+  inline: { index: number; node: Element; text: string }[];
+} | null {
+  const inline: { index: number; node: Element; text: string }[] = [];
+  let text = "";
+
+  const visit = (node: Node): boolean => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      text += node.nodeValue ?? "";
+      return true;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return false;
+    const el = node as Element;
+    if (!INLINE_TAGS.has(el.tagName)) return false;
+    // Skip what the layer must not read through, e.g. a `<code>` holding a
+    // command: it is still part of the sentence visually, so keep it as
+    // placeholder text rather than refusing the whole element.
+    if (SKIP_TAGS.has(el.tagName) || el.matches(SKIP_SELECTOR)) {
+      text += `{${inline.length}}`;
+      inline.push({ index: inline.length, node: el, text: el.textContent ?? "" });
+      return true;
+    }
+    text += `{${inline.length}}`;
+    inline.push({ index: inline.length, node: el, text: el.textContent ?? "" });
+    return true;
+  };
+
+  for (const child of element.childNodes) {
+    if (!visit(child)) return null;
+  }
+  return { text, hasMarkup: inline.length > 0, inline };
+}
+
+/**
+ * Write a translation back, re-inserting the inline elements where the
+ * translation's `{n}` placeholders put them.
+ *
+ * Returns true when it handled the element. Anything the translation mentions
+ * that no longer has a source element is dropped rather than left as a raw
+ * `{0}` on screen.
+ */
+function rebuildPreservingInline(
+  element: Element,
+  flattened: {
+    text: string;
+    hasMarkup: boolean;
+    inline: { index: number; node: Element; text: string }[];
+  },
+  translated: string,
+): boolean {
+  if (!flattened.hasMarkup) return false;
+
+  const nodes: Node[] = [];
+  let cursor = 0;
+  const pattern = /\{(\d+)\}/g;
+  let match: RegExpExecArray | null = pattern.exec(translated);
+  while (match) {
+    if (match.index > cursor) {
+      nodes.push(document.createTextNode(translated.slice(cursor, match.index)));
+    }
+    const source = flattened.inline.find((entry) => entry.index === Number(match![1]));
+    if (source) nodes.push(source.node);
+    cursor = match.index + match[0].length;
+    match = pattern.exec(translated);
+  }
+  if (cursor < translated.length) {
+    nodes.push(document.createTextNode(translated.slice(cursor)));
+  }
+
+  element.replaceChildren(...nodes);
+  return true;
 }
 
 /** Match the browser's language preference against what we ship. */
