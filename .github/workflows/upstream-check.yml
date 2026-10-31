@@ -1,0 +1,91 @@
+name: Upstream check
+
+# This fork wraps K-Dense-AI/k-dense-byok; the desktop shell sits on top of it
+# rather than replacing it. Upstream commits in bursts (weeks of silence, then
+# thirty commits in a day), so a scheduled check reports "N new commits" once
+# instead of one notification per push.
+#
+# Edit this file in the fork: the workflow only runs where the `upstream`
+# remote points at the parent repository.
+on:
+  schedule:
+    # Mondays, 08:17 UTC. Off the hour so it does not queue behind everyone
+    # else's :00 cron.
+    - cron: "17 8 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Count commits we are behind
+        id: upstream
+        run: |
+          git remote add upstream https://github.com/K-Dense-AI/k-dense-byok.git
+          git fetch --quiet upstream main
+
+          # HEAD..upstream/main is what we have not merged yet. Comparing
+          # against the merge base instead would count our own commits as
+          # divergence and drift over time.
+          BEHIND=$(git rev-list --count HEAD..upstream/main)
+          echo "behind=$BEHIND" >> "$GITHUB_OUTPUT"
+
+          if [ "$BEHIND" -eq 0 ]; then
+            echo "Up to date with upstream."
+            exit 0
+          fi
+
+          BASE=$(git merge-base HEAD upstream/main)
+          {
+            echo "### Commits upstream has that this fork does not ($BEHIND)"
+            echo
+            git log --oneline --no-decorate "$BASE..upstream/main" | head -40
+            if [ "$BEHIND" -gt 40 ]; then
+              echo
+              echo "_…and $((BEHIND - 40)) more._"
+            fi
+
+            # Only overlapping paths can actually conflict. Our desktop shell
+            # lives in files upstream does not have, so listing all 30 of our
+            # edits would bury the handful that matter.
+            OVERLAP=$(comm -12 \
+              <(git diff --name-only "$BASE..HEAD" | sort) \
+              <(git diff --name-only "$BASE..upstream/main" | sort))
+            echo
+            echo "### Files both sides changed (merge risk)"
+            echo
+            if [ -n "$OVERLAP" ]; then
+              echo "$OVERLAP" | sed 's/^/- `/; s/$/`/'
+            else
+              echo "_None — upstream's changes and ours do not touch the same files._"
+            fi
+          } > body.md
+          cat body.md
+
+      - name: Open or update the tracking issue
+        if: steps.upstream.outputs.behind != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BEHIND: ${{ steps.upstream.outputs.behind }}
+        run: |
+          TITLE="Upstream has $BEHIND new commits"
+
+          # A fixed label is the issue's identity. Without one, every run would
+          # open a fresh issue because the count in the title keeps changing.
+          EXISTING=$(gh issue list --label upstream-sync --state open --json number --jq '.[0].number')
+
+          if [ -n "$EXISTING" ]; then
+            gh issue edit "$EXISTING" --title "$TITLE" --body-file body.md
+            echo "Updated issue #$EXISTING"
+          else
+            gh label create upstream-sync --description "Upstream commits not yet merged" --color 0E8A16 2>/dev/null || true
+            gh issue create --title "$TITLE" --label upstream-sync --body-file body.md
+          fi
