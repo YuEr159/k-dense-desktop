@@ -18,6 +18,8 @@ node_modules/
 out/
 dist/
 build/
+# electron-builder output when the standard dist/ is locked by a running app
+dist-new/
 
 # Logs
 *.log
