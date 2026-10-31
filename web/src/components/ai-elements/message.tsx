@@ -484,20 +484,25 @@ export const MessageResponse = memo(
     ], [projectId]);
     return (
       <OpenMarkdownFileContext.Provider value={onOpenFile}>
-        <Streamdown
-          className={cn(
-            "size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
-            className
-          )}
-          components={streamdownComponents}
-          BlockComponent={WorkflowAwareBlock}
-          rehypePlugins={rehypePlugins}
-          linkSafety={linkSafetyOff}
-          plugins={streamdownPlugins}
-          {...props}
-        >
-          {typeof children === "string" ? normalizeMarkdown(children) : children}
-        </Streamdown>
+        {/* The model's own words are never UI copy: a sentence about a "File"
+            or a "Diff" must not have that word swapped by the runtime
+            translator. `display: contents` keeps the wrapper out of layout. */}
+        <div data-no-translate className="contents">
+          <Streamdown
+            className={cn(
+              "size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+              className
+            )}
+            components={streamdownComponents}
+            BlockComponent={WorkflowAwareBlock}
+            rehypePlugins={rehypePlugins}
+            linkSafety={linkSafetyOff}
+            plugins={streamdownPlugins}
+            {...props}
+          >
+            {typeof children === "string" ? normalizeMarkdown(children) : children}
+          </Streamdown>
+        </div>
       </OpenMarkdownFileContext.Provider>
     );
   },

@@ -5,6 +5,7 @@ import { useTheme } from "next-themes";
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { LOCALES, useLocale } from "@/lib/i18n/locale";
 import {
   DEFAULT_SHELL_SETTINGS,
   getShellSettings,
@@ -15,6 +16,7 @@ import { SettingsError, SettingsHeader } from "./primitives";
 
 export function AppearancePanel() {
   const { theme, setTheme } = useTheme();
+  const [locale, setLocale] = useLocale();
 
   const options: { value: string; label: string; icon: typeof SunIcon }[] = [
     { value: "light", label: "Light", icon: SunIcon },
@@ -67,6 +69,31 @@ export function AppearancePanel() {
 
   return (
     <div className="flex flex-col gap-6">
+      <div className="flex flex-col gap-3">
+        <SettingsHeader
+          title="Language"
+          description="Switches the interface language. Saved in this browser."
+          appliesTo="immediately"
+        />
+        <div className="flex gap-2">
+          {LOCALES.map((option) => {
+            const active = locale === option.id;
+            return (
+              <Button
+                key={option.id}
+                variant={active ? "default" : "outline"}
+                size="sm"
+                aria-pressed={active}
+                onClick={() => setLocale(option.id)}
+                className="flex-1 gap-1.5 text-xs"
+              >
+                {option.native}
+              </Button>
+            );
+          })}
+        </div>
+      </div>
+
       <div className="flex flex-col gap-4">
         <SettingsHeader
           title="Appearance"
