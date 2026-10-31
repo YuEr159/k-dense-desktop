@@ -9,7 +9,9 @@
 
 import { apiFetch } from "@/lib/projects";
 
-export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
+// Same list the thinking selector renders; agent frontmatter is validated
+// against it here and again on the server.
+export { THINKING_LEVEL_IDS as THINKING_LEVELS } from "@/lib/thinking-levels";
 
 export interface AgentFile {
   name: string;

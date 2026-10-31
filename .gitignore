@@ -20,6 +20,10 @@ dist/
 build/
 # electron-builder output when the standard dist/ is locked by a running app
 dist-new/
+dist-icon/
+# Generated from web/public/k-dense-logo.png by desktop/scripts/make-icon.mjs
+desktop/resources/icon.ico
+desktop/resources/icon.png
 
 # Logs
 *.log

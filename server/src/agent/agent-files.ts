@@ -22,6 +22,7 @@ import { KADY_PI_AGENT_DIR } from "../config.ts";
 import { seedSubagentResources } from "./subagent-resources.ts";
 import { SUBAGENT_TYPES } from "./subagents.ts";
 import { piSettingsPath, readPiSettings, writePiSettings, type ToggleResult } from "./capability-state.ts";
+import { THINKING_LEVELS } from "./thinking.ts";
 
 const require_ = createRequire(import.meta.url);
 
@@ -45,7 +46,9 @@ export const AGENT_NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
 /** Names taken by static `/agents/<name>` routes (`GET/PUT /agents/defaults`). */
 export const RESERVED_AGENT_NAMES: ReadonlySet<string> = new Set(["defaults"]);
-export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
+// Re-exported so callers that validate agent frontmatter keep one import; the
+// list itself lives in thinking.ts, next to the run-body validator.
+export { THINKING_LEVELS } from "./thinking.ts";
 
 export interface AgentFile {
   name: string;

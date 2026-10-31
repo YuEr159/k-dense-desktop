@@ -67,6 +67,9 @@ function createWindow() {
     backgroundColor: "#0b0b0c",
     show: false,
     title: "K-Dense BYOK",
+    // A packaged build reads the exe's own icon; this is what the taskbar and
+    // window switch to during development, when there is no exe icon to embed.
+    ...(isDev ? { icon: path.join(import.meta.dirname, "resources", "icon.png") } : {}),
     webPreferences: {
       // The renderer is the unmodified web app: no preload bridge, no Node
       // integration, so it keeps the exact security posture it has in a

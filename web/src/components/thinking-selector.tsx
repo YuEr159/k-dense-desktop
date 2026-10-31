@@ -5,11 +5,13 @@ import { BrainIcon, CheckIcon, ChevronDownIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  DEFAULT_THINKING_LEVEL,
+  THINKING_LEVEL_IDS,
+  type ThinkingLevel,
+} from "@/lib/thinking-levels";
 
-/** Pi's reasoning levels (`ThinkingLevel` in @earendil-works/pi-agent-core). */
-export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
-
-export const DEFAULT_THINKING_LEVEL: ThinkingLevel = "high";
+export { DEFAULT_THINKING_LEVEL, type ThinkingLevel };
 
 export const THINKING_LEVELS: { id: ThinkingLevel; label: string; description: string }[] = [
   { id: "off", label: "Off", description: "No extended reasoning — fastest and cheapest." },
@@ -17,7 +19,8 @@ export const THINKING_LEVELS: { id: ThinkingLevel; label: string; description: s
   { id: "low", label: "Low", description: "Brief reasoning for straightforward tasks." },
   { id: "medium", label: "Medium", description: "Balanced reasoning effort and cost." },
   { id: "high", label: "High", description: "Deep reasoning for hard problems." },
-  { id: "xhigh", label: "XHigh", description: "Maximum effort — slowest, most thorough, most tokens." },
+  { id: "xhigh", label: "XHigh", description: "Very high effort — slowest, most thorough, most tokens." },
+  { id: "max", label: "Max", description: "The highest tier a model declares. Most models clamp this to XHigh." },
 ];
 
 export function ThinkingSelector({

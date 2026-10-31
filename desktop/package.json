@@ -9,7 +9,8 @@
     "start": "electron .",
     "build:runtime": "node scripts/build-runtime.mjs",
     "build:externals": "node scripts/fetch-externals.mjs",
-    "dist": "npm run build:runtime && npm run build:externals && electron-builder --config electron-builder.json --win"
+    "build:icon": "node scripts/make-icon.mjs",
+    "dist": "npm run build:icon && npm run build:runtime && npm run build:externals && electron-builder --config electron-builder.json --win"
   },
   "devDependencies": {
     "electron": "^45.2.1",

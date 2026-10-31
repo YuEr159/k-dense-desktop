@@ -75,6 +75,11 @@ jobs:
       - name: Stage runtime payload
         run: node desktop/scripts/build-runtime.mjs
 
+      # The ico is generated, not committed, so the runner must build it before
+      # electron-builder looks for resources/icon.ico.
+      - name: Generate app icon
+        run: node desktop/scripts/make-icon.mjs
+
       # Downloads PortableGit and uv. Pinned by version with sha256 on uv; the
       # GitHub release asset is the primary source with a Tsinghua mirror.
       - name: Stage bundled binaries

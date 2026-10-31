@@ -4,6 +4,7 @@ import type { Database } from "@/components/database-selector";
 import type { ModalInstance } from "@/components/compute-selector";
 import type { Model } from "@/components/model-selector";
 import type { ThinkingLevel } from "@/components/thinking-selector";
+import { DEFAULT_THINKING_LEVEL, THINKING_LEVEL_IDS } from "@/lib/thinking-levels";
 import type { PromptImage } from "@/lib/image-attachments";
 import type { ModalComputeScope } from "@/lib/modal-jobs";
 import type { Skill } from "@/lib/use-skills";
@@ -210,9 +211,10 @@ function sanitizeSkills(value: unknown): Skill[] {
 }
 
 function sanitizeThinkingLevel(value: unknown, nullable = false): ThinkingLevel | null {
-  const levels: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh"];
   if (nullable && value === null) return null;
-  return levels.includes(value as ThinkingLevel) ? (value as ThinkingLevel) : "high";
+  return (THINKING_LEVEL_IDS as readonly unknown[]).includes(value)
+    ? (value as ThinkingLevel)
+    : DEFAULT_THINKING_LEVEL;
 }
 
 function sanitizeBlobRefs(value: unknown): StoredBlobRef[] {

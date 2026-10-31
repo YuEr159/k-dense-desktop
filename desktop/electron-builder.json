@@ -6,6 +6,7 @@
     "output": "../dist",
     "buildResources": "resources"
   },
+  "icon": "icon.ico",
   "files": [
     "main.mjs",
     "service-manager.mjs",
