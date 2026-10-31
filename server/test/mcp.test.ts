@@ -270,7 +270,11 @@ describe("pi mcp CLI bridge", () => {
     });
     const failed = await testMcpServer("y", { command: "definitely-not-a-binary" }, paths);
     expect(failed.state).toBe("failed");
-    expect(failed.error).toMatch(process.platform === "win32" ? /not recognized/ : /ENOENT/);
+    // `shell: false` spawn reports this as ENOENT; on Windows the CLI runs the
+    // command through the shell instead, so the text is the system shell's own
+    // wording — translated on a non-English Windows. Assert the diagnostic is
+    // present at all rather than one locale's spelling of it.
+    expect(failed.error).toMatch(process.platform === "win32" ? /definitely-not-a-binary/ : /ENOENT/);
   }, 60_000);
 });
 

@@ -3,7 +3,10 @@ import { parseThinkingLevel, THINKING_LEVELS } from "../src/agent/thinking.ts";
 
 describe("parseThinkingLevel", () => {
   it("accepts every Pi level", () => {
-    expect(THINKING_LEVELS).toEqual(["off", "minimal", "low", "medium", "high", "xhigh"]);
+    // The list's *contents* are checked against Pi's own type in
+    // thinking-levels.test.ts. Hard-coding them here as well made this test
+    // fail on a Pi upgrade that legitimately added a level ("max" in 1.0)
+    // while saying nothing about the parser it claims to cover.
     for (const level of THINKING_LEVELS) {
       expect(parseThinkingLevel(level)).toBe(level);
     }
