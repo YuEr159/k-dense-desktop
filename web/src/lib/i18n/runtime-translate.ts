@@ -186,8 +186,35 @@ export function translateSubtree(
     node = walker.nextNode();
   }
 
+  /**
+   * Text nodes that were merged into their element's single replacement.
+   * Handled per-element below; matching them individually would only ever see
+   * fragments.
+   */
+  const merged = new Set<Text>();
   const plan: { node: Text; text: string }[] = [];
+
+  for (const element of elements) {
+    // React renders `{price} in / {qty} out per 1M tok` as several sibling
+    // text nodes — one per interpolation — so no single node ever holds the
+    // sentence a `{0}` template describes. When an element's visible content is
+    // entirely text, try the whole string and replace the run in place.
+    const parts = [...element.childNodes];
+    if (parts.length < 2) continue;
+    if (parts.some((child) => child.nodeType !== Node.TEXT_NODE)) continue;
+
+    const whole = parts.map((child) => child.nodeValue ?? "").join("");
+    const translated = translateText(matcher, whole);
+    if (translated === whole) continue;
+
+    // Collapse the run into a single node. React re-renders the element from
+    // its own model on the next update, which restores the separate nodes.
+    for (const child of parts) merged.add(child as Text);
+    element.textContent = translated;
+  }
+
   for (const textNode of textNodes) {
+    if (merged.has(textNode)) continue;
     const original = textNode.nodeValue ?? "";
     const translated = translateText(matcher, original);
     if (translated !== original) plan.push({ node: textNode, text: translated });

@@ -141,6 +141,22 @@ describe("translateSubtree", () => {
       "Connected (3) providers",
     );
   });
+
+  it("joins sibling text nodes before matching a template", () => {
+    // React renders `{a} in / {b} out per 1M tok` as five sibling text nodes;
+    // no single one holds the sentence the template describes.
+    const local = buildMatcher({ "{0} in / {1} out": "{0} 输入 / {1} 输出" });
+    const host = document.createElement("div");
+    host.innerHTML = "<span>$40.00 in / $200.00 out</span>";
+    const span = host.querySelector("span")!;
+    span.textContent = "";
+    for (const piece of ["$", "40.00", " in / $", "200.00", " out"]) {
+      span.appendChild(document.createTextNode(piece));
+    }
+
+    apply(translateSubtree(host, local, noSkip));
+    expect(host.textContent).toBe("$40.00 输入 / $200.00 输出");
+  });
 });
 
 describe("buildMatcher", () => {
