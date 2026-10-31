@@ -114,12 +114,57 @@ function cleanJsxText(raw) {
   return out;
 }
 
+/** Attributes whose expressions hold styling or wiring, never copy. */
+const NON_COPY_ATTRIBUTES = new Set([
+  "className",
+  "class",
+  "style",
+  "id",
+  "key",
+  "ref",
+  "href",
+  "src",
+  "srcSet",
+  "type",
+  "name",
+  "value",
+  "defaultValue",
+  "onClick",
+  "onChange",
+  "onKeyDown",
+  "onSubmit",
+  "variant",
+  "size",
+  "asChild",
+  "role",
+  "data-testid",
+]);
+
 /**
  * Reject anything structural rather than prose. These run after the AST has
  * narrowed candidates to text positions, so they only catch code that happens
  * to sit in one.
+ *
+ * `allowBareWord` is set for string literals in *any* expression position
+ * inside JSX (`{status === "checking" ? "checking…" : "disconnected"}`), where
+ * a lone lowercase word is real copy. Everywhere else a bare lowercase word is
+ * far more likely to be a key, an id, or a CSS value.
  */
-function looksLikeUiCopy(value) {
+
+/** Office/preview font pickers list real font names; those are data. */
+const FONT_NAMES = new Set([
+  "Arial", "Calibri", "Cambria", "Carlito", "Corsiva", "Garamond", "Georgia",
+  "Helvetica", "Palatino", "Tahoma", "Times", "Verdana", "Liberation",
+  "Symbol", "Wingdings", "Courier", "Monospace", "Serif", "Sans",
+]);
+
+/** KeyboardEvent.key values that appear in switch/case comparisons. */
+const KEY_NAMES = new Set([
+  "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Backspace", "Delete",
+  "Enter", "Escape", "Home", "End", "PageUp", "PageDown", "Tab", "Space",
+]);
+
+function looksLikeUiCopy(value, { allowBareWord = false } = {}) {
   const text = value.replace(/\s+/g, " ").trim();
   if (text.length < 2 || text.length > 200) return false;
   if (!/[A-Za-z]/.test(text)) return false;
@@ -134,11 +179,20 @@ function looksLikeUiCopy(value) {
   if (/^[A-Z_]{3,}$/.test(text)) return false;
   if (/^(X-|Content-|Access-Control-)/.test(text)) return false;
   if (/^[a-z0-9]+([-_][a-z0-9]+)+$/.test(text)) return false;
-  if (/^[a-z]+$/.test(text)) return false;
+  if (!allowBareWord && /^[a-z]+$/.test(text)) return false;
 
   // Command lines and JSON snippets shown as examples must survive verbatim.
   if (/^(--|\$ |npx |npm |pip |uv |git |docker |curl )/.test(text)) return false;
   if (/{.*}/.test(text) && !/\s[a-z]+\s/.test(text)) return false;
+
+  // Things that are data, not copy. These reached the harvester through the
+  // JSX-expression path, which sees every string literal in a render
+  // expression — including font lists, keystroke names and numeric formatting.
+  if (FONT_NAMES.has(text)) return false;
+  if (KEY_NAMES.has(text)) return false;
+  if (/^[\d.%\s]+(center|left|right|top|bottom)?$/i.test(text)) return false;
+  if (/^\d+(\.\d+)?(s|ms|px|%|MB|GB|KiB|MiB|GiB)$/.test(text)) return false;
+  if (/^[A-Za-z]$/.test(text)) return false;
 
   // A fragment that starts with closing punctuation is the tail of a sentence
   // an expression split; it cannot be translated on its own.
@@ -190,6 +244,7 @@ function harvestFile(file, source) {
         found.push({
           text: decodeEntities(node.initializer.text),
           line: sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1,
+          insideJsx: true,
         });
       }
     } else if (ts.isPropertyAssignment(node)) {
@@ -198,14 +253,49 @@ function harvestFile(file, source) {
         found.push({
           text: decodeEntities(node.initializer.text),
           line: sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1,
+          insideJsx: true,
         });
       }
     }
+
+    // A literal rendered by a ternary or logical expression
+    // (`{ok ? "Done" : "disconnected"}`) is copy too, and the JSX-text path
+    // above deliberately skips the whole element because it mixes text and
+    // expressions. Collect those literals; they reach the DOM as their own
+    // text node, so the runtime layer can replace them individually.
+    //
+    // Not inside a class/style-ish attribute: `className={cn(active && "bg-muted")}`
+    // is the single largest source of false positives here.
+    if (
+      ts.isJsxExpression(node) &&
+      node.expression &&
+      !(ts.isJsxAttribute(node.parent) && NON_COPY_ATTRIBUTES.has(node.parent.name.getText(sf)))
+    ) {
+      const collectLiteral = (child) => {
+        if (ts.isStringLiteral(child) || ts.isNoSubstitutionTemplateLiteral(child)) {
+          found.push({
+            text: decodeEntities(child.text),
+            line: sf.getLineAndCharacterOfPosition(child.getStart(sf)).line + 1,
+            insideJsx: true,
+          });
+          return;
+        }
+        // Stop at nested JSX: its own text is handled above.
+        if (ts.isJsxElement(child) || ts.isJsxFragment(child) || ts.isJsxSelfClosingElement(child)) {
+          return;
+        }
+        ts.forEachChild(child, collectLiteral);
+      };
+      collectLiteral(node.expression);
+    }
+
     ts.forEachChild(node, visit);
   };
 
   visit(sf);
-  return found.filter((entry) => looksLikeUiCopy(entry.text));
+  return found.filter((entry) =>
+    looksLikeUiCopy(entry.text, { allowBareWord: entry.insideJsx === true }),
+  );
 }
 
 const files = walk(SRC);
