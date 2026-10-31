@@ -179,6 +179,19 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
     }));
   });
 
+  // Whether closing the app would interrupt work. The desktop shell asks this
+  // before quitting so the confirm dialog can name what is at stake; a plain
+  // "are you sure" would train users to click through it.
+  app.get("/runtime-status", async () => {
+    const paths = activePaths();
+    const infos = await listSessions(paths);
+    const hidden = schedulerSessionId(paths);
+    const running = infos
+      .filter((i) => i.id !== hidden && isRunClaimed(paths.id, i.id))
+      .map((i) => ({ id: i.id, name: i.name ?? null }));
+    return { runningSessions: running.length, sessions: running };
+  });
+
   // Full transcript of a stored session, replayed as client frames so the UI
   // can rebuild a past chat after a reload ("reopen session").
   app.get<{ Params: { id: string } }>("/sessions/:id/history", async (req, reply) => {

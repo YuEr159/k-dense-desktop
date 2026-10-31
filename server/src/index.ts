@@ -48,7 +48,7 @@ import { registerNotebookRobustnessRoutes } from "./api/notebook-robustness.ts";
 import { notebookRobustness } from "./agent/notebook-robustness.ts";
 import { startAutomaticSkillSync } from "./agent/skills-sync.ts";
 import { modalJobManager } from "./modal/manager.ts";
-import { syncHelperVenv } from "./helpers-env.ts";
+import { HELPERS_VENV_DIR, helperVenvState, syncHelperVenvAsync } from "./helpers-env.ts";
 import { configureHttpProxy } from "./http-proxy.ts";
 
 function readCookie(req: FastifyRequest, name: string): string | undefined {
@@ -170,7 +170,19 @@ export async function buildApp() {
     withActiveProject(projectId, () => done());
   });
 
-  app.get("/health", async () => ({ status: "ok" }));
+  // Readiness for the desktop shell's startup screen. `status` stays the
+  // shallow probe it always was; `setup` reports work that runs in the
+  // background after the port is listening, so the window can say what it is
+  // waiting for instead of showing an unchanging "Starting…".
+  app.get("/health", async () => ({
+    status: "ok",
+    setup: {
+      helpers: {
+        state: helperVenvState().state,
+        venv: HELPERS_VENV_DIR,
+      },
+    },
+  }));
   app.get("/config", async () => ({ modal_configured: modalConfigured() }));
 
   // Adopt turns that Pi extensions start on an idle session (supervisor
@@ -246,7 +258,15 @@ if (isMain) {
   // only be used by the child `pi` processes that run subagents.
   const proxy = configureHttpProxy();
   const tokenSuppliedAtBoot = (process.env.KADY_AUTH_TOKEN?.trim().length ?? 0) >= 16;
-  syncHelperVenv(); // best-effort; previews degrade gracefully if it fails
+  // Background, not awaited: the first run installs ~555 MB of wheels and
+  // blocking here kept /health from answering until it finished, which made the
+  // desktop shell's readiness probe time out. Previews report deps-missing
+  // until this settles.
+  void syncHelperVenvAsync().then((status) => {
+    if (status === 0) app.log.info({ venv: HELPERS_VENV_DIR }, "helper venv ready");
+    else if (status !== null)
+      app.log.warn({ status, venv: HELPERS_VENV_DIR }, "helper venv sync failed");
+  });
   const app = await buildApp();
   // Durable pi-subagents schedules fire from a resident session per project;
   // open those hosts now and keep the budget hold reconciled (not in

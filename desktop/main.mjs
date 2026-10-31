@@ -15,7 +15,7 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
-import { UI_URL, packagedArtifacts, setFatalHandler, startServices, stopServices } from "./service-manager.mjs";
+import { BACKEND_URL, UI_URL, packagedArtifacts, setFatalHandler, startServices, stopServices } from "./service-manager.mjs";
 import { checkRuntime } from "./preflight.mjs";
 
 const isDev = !app.isPackaged;
@@ -116,6 +116,77 @@ function isInternalUrl(rawUrl) {
   }
 }
 
+/**
+ * Drive the startup placeholder's two lines while the services come up.
+ *
+ * The renderer is a `data:` document, so it cannot fetch the loopback API
+ * itself (cross-origin, and the backend's request guard rejects the null
+ * origin). Polling here and injecting text over `executeJavaScript` keeps the
+ * placeholder a plain page with no preload bridge.
+ *
+ * Stops on its own once the window navigates to the real UI.
+ */
+function startStatusPolling(window) {
+  let stopped = false;
+  const stop = () => {
+    stopped = true;
+  };
+  window.webContents.once("did-start-navigation", (event) => {
+    // The placeholder is the first document; anything after it is the app.
+    if (!event.isSameDocument) stop();
+  });
+  window.webContents.once("destroyed", stop);
+
+  const say = (text, hint) => {
+    if (stopped || window.isDestroyed()) return;
+    window.webContents
+      .executeJavaScript(
+        `(() => {
+           const line = document.getElementById("line");
+           const note = document.getElementById("hint");
+           if (!line) return false;
+           line.textContent = ${JSON.stringify(text)};
+           if (note) note.textContent = ${JSON.stringify(hint ?? "")};
+           return true;
+         })()`,
+      )
+      .catch(() => {});
+  };
+
+  const tick = async () => {
+    if (stopped || window.isDestroyed()) return;
+    try {
+      const res = await fetch(`${BACKEND_URL}/health`, { signal: AbortSignal.timeout(2000) });
+      if (!res.ok) throw new Error(String(res.status));
+      const body = await res.json();
+      const helpers = body?.setup?.helpers;
+      if (helpers?.state === "syncing") {
+        say(
+          "Preparing Python previews…",
+          "Installing scientific Python packages. This happens once, and can take several minutes.",
+        );
+      } else if (helpers?.state === "failed") {
+        say(
+          "Starting local services…",
+          `Python previews are unavailable (${helpers.detail ?? "uv sync failed"}). The app still works.`,
+        );
+      } else {
+        say("Starting local services…", "Loading the interface…");
+      }
+    } catch {
+      // Backend not listening yet: the placeholder already says so.
+    }
+    if (!stopped) setTimeout(tick, 1500);
+  };
+  void tick();
+
+  // The frontend usually answers a moment after the backend; without a hint
+  // the gap looks like a stall.
+  setTimeout(() => {
+    say("Starting the interface…", "The first launch takes longer than later ones.");
+  }, 20_000);
+}
+
 async function boot() {
   const window = createWindow();
   const artifacts = runtimeArtifacts();
@@ -137,8 +208,9 @@ async function boot() {
   if (warnings.length) {
     console.warn(warnings.join("\n"));
   }
-  // Show a lightweight placeholder while the services come up; the first
-  // `next start` can take a few seconds even with a warm build.
+  // Placeholder while the services come up. The main process polls /health and
+  // pushes progress in: the first launch installs ~555 MB of Python wheels, and
+  // a screen that never changes reads as a hang.
   await window.loadURL(
     "data:text/html;charset=utf-8," +
       encodeURIComponent(
@@ -146,13 +218,15 @@ async function boot() {
          <body style="margin:0;height:100vh;display:grid;place-items:center;
                       background:#0b0b0c;color:#a1a1aa;
                       font:14px/1.6 system-ui,sans-serif">
-           <div style="text-align:center">
-             <div style="font-size:16px;color:#e4e4e7;margin-bottom:8px">K-Dense BYOK</div>
-             <div>Starting local services…</div>
+           <div style="text-align:center;max-width:32rem;padding:0 2rem">
+             <div style="font-size:16px;color:#e4e4e7;margin-bottom:12px">K-Dense BYOK</div>
+             <div id="line">Starting local services…</div>
+             <div id="hint" style="margin-top:10px;font-size:12px;color:#52525b"></div>
            </div>
          </body>`,
       ),
   );
+  startStatusPolling(window);
 
   const ready = await startServices({
     dataRoot: dataRoot(),
@@ -205,10 +279,22 @@ if (!app.requestSingleInstanceLock()) {
     app.quit();
   });
 
-  // Closing the window ends the app: the services exist to serve it.
+  // Closing the window ends the app by default — the services exist to serve
+  // it, and an AI assistant left running in the tray is a process nobody
+  // remembers. The one exception is work in flight: the backend answers with
+  // what would be cut off, and the user decides.
   app.on("window-all-closed", () => {
-    quitting = true;
-    void stopServices().finally(() => app.quit());
+    void (async () => {
+      if (await confirmQuitWithActiveRuns()) {
+        quitting = true;
+        await stopServices();
+        app.quit();
+      } else {
+        // The user kept the app open; bring the window back rather than
+        // leaving a headless process with no way to reach it.
+        void boot();
+      }
+    })();
   });
 
   app.on("before-quit", () => {
@@ -221,4 +307,54 @@ if (!app.requestSingleInstanceLock()) {
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0 && !quitting) void boot();
   });
+}
+
+/**
+ * Ask the backend what a quit would interrupt.
+ *
+ * Only a running turn (streaming, or a run in its model-setup phase) counts.
+ * Durable Modal jobs are explicitly restart-recoverable, and a queued async
+ * subagent run reattaches on the next launch, so warning about those would
+ * teach users to dismiss the dialog without reading it.
+ */
+async function quitInterruptsWork() {
+  try {
+    const res = await fetch(`${BACKEND_URL}/runtime-status`, { signal: AbortSignal.timeout(3000) });
+    if (!res.ok) return null;
+    const body = await res.json();
+    return typeof body?.runningSessions === "number" ? body : null;
+  } catch {
+    // No backend (already stopping, or it never started): nothing to warn about.
+    return null;
+  }
+}
+
+/** True when the app should quit; false keeps it running. */
+async function confirmQuitWithActiveRuns() {
+  const status = await quitInterruptsWork();
+  if (!status || status.runningSessions === 0) return true;
+
+  const names = status.sessions
+    .map((s) => s.name)
+    .filter(Boolean)
+    .slice(0, 5);
+  const detail =
+    names.length > 0
+      ? `Still running: ${names.join(", ")}. Closing now ends the response mid-stream.`
+      : "A response is still streaming. Closing now ends it mid-stream.";
+
+  const { response } = await dialog.showMessageBox({
+    type: "warning",
+    title: "A response is still running",
+    message:
+      status.runningSessions === 1
+        ? "One chat is still working."
+        : `${status.runningSessions} chats are still working.`,
+    detail,
+    buttons: ["Keep working", "Quit anyway"],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true,
+  });
+  return response === 1;
 }

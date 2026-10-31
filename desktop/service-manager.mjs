@@ -21,7 +21,7 @@ import process from "node:process";
 export const BACKEND_PORT = 8000;
 export const FRONTEND_PORT = 3000;
 export const UI_URL = `http://127.0.0.1:${FRONTEND_PORT}`;
-const BACKEND_URL = `http://127.0.0.1:${BACKEND_PORT}`;
+export const BACKEND_URL = `http://127.0.0.1:${BACKEND_PORT}`;
 
 const children = new Set();
 let shuttingDown = false;
@@ -85,6 +85,11 @@ function commonEnv(dataRoot, modelsCatalogue, externalsDir) {
     KADY_DATA_ROOT: dataRoot,
     KADY_PORT: String(BACKEND_PORT),
     KADY_FRONTEND_PORT: String(FRONTEND_PORT),
+    // The helper venv is ~555 MB of Python packages built by `uv sync`. Left in
+    // the payload (uv's default, beside pyproject.toml) an upgrade would wipe
+    // it: NSIS replaces the install directory wholesale. Keep it in the data
+    // root, which survives upgrades and is already the user's writable area.
+    KADY_HELPERS_VENV: path.join(dataRoot, "python", "helpers"),
   };
   if (modelsCatalogue) env.KADY_MODELS_CATALOGUE = modelsCatalogue;
 
