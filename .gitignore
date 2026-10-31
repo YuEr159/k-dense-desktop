@@ -33,14 +33,24 @@ yarn-error.log*
 logs/
 
 # Environment
+# `.env*` covers every variant (`.env.production`, `.env.staging`, …), not
+# just the ones listed below: the backend loads `.env` from the repo root, so a
+# stray `.env.production` would otherwise be committed. `.env.example` is kept.
 .env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
+.env*
+!.env.example
+!.env.*.example
 
 # Credentials
 vertex_ai_credentials.json
+*.pem
+*.key
+.npmrc
+.netrc
+id_rsa
+id_ed25519
+secrets.json
+credentials.json
 
 # OS
 .DS_Store
