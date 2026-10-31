@@ -39,52 +39,59 @@ export function LocaleProvider({ children }: { children: React.ReactNode }) {
     const dictionary = DICTIONARIES[locale];
     if (!dictionary) return;
 
-    const matcher = buildMatcher(dictionary);
-    const shouldSkip = (node: Node) => {
-      const element = node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement;
-      if (!element) return false;
-      return IGNORED_ROOTS.has(element.tagName);
-    };
+    try {
+      const matcher = buildMatcher(dictionary);
+      const shouldSkip = (node: Node) => {
+        const element = node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement;
+        if (!element) return false;
+        return IGNORED_ROOTS.has(element.tagName);
+      };
 
-    /** True while this layer is writing, so the observer can ignore itself. */
-    let writing = false;
-    const apply = (root: Node) => {
-      writing = true;
-      try {
-        for (const { node, text } of translateSubtree(root, matcher, shouldSkip)) {
-          node.nodeValue = text;
+      /** True while this layer is writing, so the observer can ignore itself. */
+      let writing = false;
+      const apply = (root: Node) => {
+        writing = true;
+        try {
+          for (const { node, text } of translateSubtree(root, matcher, shouldSkip)) {
+            node.nodeValue = text;
+          }
+        } finally {
+          writing = false;
         }
-      } finally {
-        writing = false;
-      }
-    };
+      };
 
-    apply(document.body);
+      apply(document.body);
 
-    const observer = new MutationObserver((records) => {
-      if (writing) return;
-      for (const record of records) {
-        if (record.type === "characterData") {
-          if (record.target.parentElement) apply(record.target.parentElement);
-          continue;
-        }
-        for (const node of record.addedNodes) {
-          // Defer: translating inside the callback mutates the DOM React is
-          // still assembling, and React would then see its own text changed.
-          if (node.nodeType === Node.ELEMENT_NODE || node.nodeType === Node.TEXT_NODE) {
-            queueMicrotask(() => apply(node));
+      const observer = new MutationObserver((records) => {
+        if (writing) return;
+        for (const record of records) {
+          if (record.type === "characterData") {
+            if (record.target.parentElement) apply(record.target.parentElement);
+            continue;
+          }
+          for (const node of record.addedNodes) {
+            // Defer: translating inside the callback mutates the DOM React is
+            // still assembling, and React would then see its own text changed.
+            if (node.nodeType === Node.ELEMENT_NODE || node.nodeType === Node.TEXT_NODE) {
+              queueMicrotask(() => apply(node));
+            }
           }
         }
-      }
-    });
+      });
 
-    observer.observe(document.body, {
-      childList: true,
-      subtree: true,
-      characterData: true,
-    });
+      observer.observe(document.body, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+      });
 
-    return () => observer.disconnect();
+      return () => observer.disconnect();
+    } catch (error) {
+      // Localisation is a presentation nicety; the app must render in English
+      // rather than fail to mount. An uncaught error here aborts the whole
+      // effect chain, which surfaces as a screen stuck on "Loading…".
+      console.error("interface translation disabled:", error);
+    }
   }, [locale]);
 
   return <>{children}</>;
