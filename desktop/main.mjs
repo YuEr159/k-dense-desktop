@@ -10,7 +10,7 @@
  * renderer is a real Chromium page talking to the same origins the browser
  * build expects.
  */
-import { app, BrowserWindow, dialog, shell } from "electron";
+import { app, BrowserWindow, dialog, Menu, nativeImage, shell, Tray } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -27,7 +27,10 @@ app.setName("Kady");
 
 /** Keep one window; re-focusing the dock/taskbar icon should not spawn more. */
 let mainWindow = null;
+let tray = null;
 let quitting = false;
+/** Set once startServices() has been called; services outlive any one window. */
+let servicesStarted = false;
 
 /**
  * Writable state lives outside the install directory: a packaged app under
@@ -36,6 +39,55 @@ let quitting = false;
  */
 function dataRoot() {
   return path.join(app.getPath("userData"), "data");
+}
+
+/**
+ * Shell preferences, kept beside the backend's own settings rather than in
+ * Electron's userData root so `%APPDATA%/Kady/data` stays the one directory a
+ * user has to back up.
+ */
+function shellSettingsPath() {
+  return path.join(dataRoot(), "shell.json");
+}
+
+function readShellSettings() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(shellSettingsPath(), "utf8"));
+    return raw && typeof raw === "object" ? raw : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * What closing the window does.
+ *
+ * `tray` destroys the window and keeps the process alive, which drops a
+ * ~750 MB resident app to roughly 300 MB (the renderer is 274 MB of that). It
+ * is the default because background work — Modal jobs, schedules — should not
+ * stop just because the window was dismissed. `quit` is the classic behaviour
+ * and stays available for users who dislike a resident process.
+ *
+ * The file is also served over /settings/shell (server/src/shell-settings.ts),
+ * which is how the Settings UI writes it. Keep the two readers agreeing on the
+ * field name and the "tray" default.
+ */
+function closeAction() {
+  const value = readShellSettings().closeAction;
+  return value === "quit" ? "quit" : "tray";
+}
+
+function writeShellSetting(key, value) {
+  let current = {};
+  try {
+    current = JSON.parse(fs.readFileSync(shellSettingsPath(), "utf8"));
+    if (!current || typeof current !== "object") current = {};
+  } catch {
+    current = {};
+  }
+  current[key] = value;
+  fs.mkdirSync(path.dirname(shellSettingsPath()), { recursive: true });
+  fs.writeFileSync(shellSettingsPath(), `${JSON.stringify(current, null, 2)}\n`);
 }
 
 /**
@@ -187,11 +239,30 @@ function startStatusPolling(window) {
   }, 20_000);
 }
 
-async function boot() {
-  const window = createWindow();
+/** The "Starting…" document, kept out of boot() so reopening can reuse it. */
+const SPLASH_HTML =
+  "data:text/html;charset=utf-8," +
+  encodeURIComponent(
+    `<!doctype html><meta charset="utf-8">
+     <body style="margin:0;height:100vh;display:grid;place-items:center;
+                  background:#0b0b0c;color:#a1a1aa;
+                  font:14px/1.6 system-ui,sans-serif">
+       <div style="text-align:center;max-width:32rem;padding:0 2rem">
+         <div style="font-size:16px;color:#e4e4e7;margin-bottom:12px">K-Dense BYOK</div>
+         <div id="line">Starting local services…</div>
+         <div id="hint" style="margin-top:10px;font-size:12px;color:#52525b"></div>
+       </div>
+     </body>`,
+  );
+
+/**
+ * Start the two services once per process. Later windows attach to them; this
+ * is what makes closing the window cheap enough to be the default.
+ */
+async function bootServices() {
   const artifacts = runtimeArtifacts();
 
-  // Fail on a missing shell before the window opens: without one, every agent
+  // Fail on a missing shell before any window opens: without one, every agent
   // tool call fails with an error the user cannot act on.
   const { blocking, warnings } = checkRuntime(artifacts);
   if (blocking.length) {
@@ -203,37 +274,54 @@ async function boot() {
     });
     quitting = true;
     app.quit();
-    return;
+    return false;
   }
   if (warnings.length) {
     console.warn(warnings.join("\n"));
   }
-  // Placeholder while the services come up. The main process polls /health and
-  // pushes progress in: the first launch installs ~555 MB of Python wheels, and
-  // a screen that never changes reads as a hang.
-  await window.loadURL(
-    "data:text/html;charset=utf-8," +
-      encodeURIComponent(
-        `<!doctype html><meta charset="utf-8">
-         <body style="margin:0;height:100vh;display:grid;place-items:center;
-                      background:#0b0b0c;color:#a1a1aa;
-                      font:14px/1.6 system-ui,sans-serif">
-           <div style="text-align:center;max-width:32rem;padding:0 2rem">
-             <div style="font-size:16px;color:#e4e4e7;margin-bottom:12px">K-Dense BYOK</div>
-             <div id="line">Starting local services…</div>
-             <div id="hint" style="margin-top:10px;font-size:12px;color:#52525b"></div>
-           </div>
-         </body>`,
-      ),
-  );
-  startStatusPolling(window);
 
-  const ready = await startServices({
-    dataRoot: dataRoot(),
-    ...artifacts,
-  });
+  servicesStarted = true;
+  return startServices({ dataRoot: dataRoot(), ...artifacts });
+}
+
+/**
+ * Open the window. When the services are still coming up this shows the
+ * progress splash; a window opened later goes straight to the app because the
+ * backend is already answering.
+ */
+async function openWindow() {
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+    return mainWindow;
+  }
+  const window = createWindow();
+
+  const backendReady = servicesStarted && (await backendAnswers());
+  if (backendReady) {
+    await window.loadURL(UI_URL);
+  } else {
+    await window.loadURL(SPLASH_HTML);
+    startStatusPolling(window);
+  }
+
+  if (isDev) window.webContents.openDevTools({ mode: "detach" });
+  return window;
+}
+
+/** Cheap reachability probe, used to skip the splash on a warm reopen. */
+async function backendAnswers() {
+  try {
+    const res = await fetch(`${BACKEND_URL}/health`, { signal: AbortSignal.timeout(1500) });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function boot() {
+  const ready = await bootServices();
   if (quitting) return;
-
   if (!ready) {
     await dialog.showMessageBox({
       type: "error",
@@ -248,8 +336,7 @@ async function boot() {
     return;
   }
 
-  await window.loadURL(UI_URL);
-  if (isDev) window.webContents.openDevTools({ mode: "detach" });
+  await openWindow();
 }
 
 // A single instance owns the ports; a second launch focuses the first window.
@@ -257,9 +344,9 @@ if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   app.on("second-instance", () => {
-    if (!mainWindow) return;
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.focus();
+    // Launching the app again is a request to see it, whether the window is
+    // minimized or was closed to the tray.
+    void reopenWindow();
   });
 
   setFatalHandler(() => {
@@ -274,27 +361,27 @@ if (!app.requestSingleInstanceLock()) {
       .then(() => app.quit());
   });
 
-  app.whenReady().then(boot).catch((error) => {
+  app.whenReady().then(async () => {
+    // The tray exists from the start so a window close lands in a running
+    // shell rather than orphaning the process with no way back.
+    if (closeAction() === "tray") createTray();
+    await boot();
+  }).catch((error) => {
     console.error("boot failed:", error);
     app.quit();
   });
 
-  // Closing the window ends the app by default — the services exist to serve
-  // it, and an AI assistant left running in the tray is a process nobody
-  // remembers. The one exception is work in flight: the backend answers with
-  // what would be cut off, and the user decides.
+  // Closing the window is handled in `window-all-closed`: in tray mode the app
+  // keeps running, otherwise it quits (after asking about streaming runs).
   app.on("window-all-closed", () => {
-    void (async () => {
-      if (await confirmQuitWithActiveRuns()) {
-        quitting = true;
-        await stopServices();
-        app.quit();
-      } else {
-        // The user kept the app open; bring the window back rather than
-        // leaving a headless process with no way to reach it.
-        void boot();
-      }
-    })();
+    // The window is already gone by now; this decides whether the process
+    // follows it. In tray mode the renderer (~274 MB) is reclaimed but the
+    // backend keeps running, so schedules and Modal jobs do not stop.
+    if (closeAction() === "quit") {
+      void quitApp();
+      return;
+    }
+    ensureTrayHint();
   });
 
   app.on("before-quit", () => {
@@ -302,10 +389,10 @@ if (!app.requestSingleInstanceLock()) {
     void stopServices();
   });
 
-  // macOS: clicking the dock icon after the window closed has nothing to
-  // restore, so quitting above is the documented stage-0 behaviour.
+  // macOS: the dock icon brings the window back instead of quitting.
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0 && !quitting) void boot();
+    if (quitting) return;
+    void reopenWindow();
   });
 }
 
@@ -327,6 +414,96 @@ async function quitInterruptsWork() {
     // No backend (already stopping, or it never started): nothing to warn about.
     return null;
   }
+}
+
+/**
+ * Tray icon and menu. Right-click gives the two actions that matter: get the
+ * window back, or actually stop the app. Double-click is the platform habit on
+ * Windows and costs nothing to support.
+ */
+function createTray() {
+  if (tray) return tray;
+  // Packaged: extraResources puts the png beside runtime/ in resources/.
+  // Checkout: read it straight from the desktop folder.
+  const candidates = isDev
+    ? [path.join(import.meta.dirname, "resources", "icon.png")]
+    : [path.join(process.resourcesPath, "icon.png"), path.join(process.resourcesPath, "icon.ico")];
+  let image = nativeImage.createEmpty();
+  for (const candidate of candidates) {
+    image = nativeImage.createFromPath(candidate);
+    if (!image.isEmpty()) break;
+  }
+  if (image.isEmpty()) {
+    // An invisible tray icon would leave the app running with no way back;
+    // better to say so than to hide the problem.
+    console.warn(`[tray] no icon found in ${candidates.join(", ")}`);
+  }
+
+  tray = new Tray(image.resize({ width: 16, height: 16 }));
+  tray.setToolTip("K-Dense BYOK");
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: "Open K-Dense BYOK", click: () => void reopenWindow() },
+      { type: "separator" },
+      {
+        label: "Quit",
+        click: () => void quitApp({ force: true }),
+      },
+    ]),
+  );
+  tray.on("double-click", () => void reopenWindow());
+  return tray;
+}
+
+/** Bring the window back, recreating it if the user closed it. */
+async function reopenWindow() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+    return;
+  }
+  try {
+    await openWindow();
+  } catch (error) {
+    console.error("could not reopen the window:", error);
+  }
+}
+
+/**
+ * The one exit path: ask about streaming runs, stop the services, quit.
+ *
+ * Services must be stopped before `app.quit()` — `before-quit` also runs on
+ * paths that never started them (a second instance rejecting the lock), and
+ * `stopServices` is idempotent, so calling it twice is harmless.
+ *
+ * `force` skips the active-run prompt; the tray's Quit item is an explicit
+ * instruction and should not bounce back with a dialog.
+ */
+async function quitApp({ force = false } = {}) {
+  if (quitting) return;
+  if (!force && !(await confirmQuitWithActiveRuns())) return;
+  quitting = true;
+  await stopServices();
+  app.quit();
+}
+
+/**
+ * Tell the user the app is still running the first time they close it, or
+ * they conclude the close failed and try again. Windows balloons are the
+ * platform's own idiom and need no notification permission.
+ */
+function ensureTrayHint() {
+  const s = readShellSettings();
+  if (s.trayHintShown) return;
+  const t = createTray();
+  if (t && typeof t.displayBalloon === "function") {
+    t.displayBalloon({
+      title: "K-Dense BYOK is still running",
+      content: "Right-click the tray icon to reopen the window or quit.",
+    });
+  }
+  writeShellSetting("trayHintShown", true);
 }
 
 /** True when the app should quit; false keeps it running. */

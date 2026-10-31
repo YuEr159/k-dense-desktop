@@ -15,7 +15,8 @@
   ],
   "extraResources": [
     { "from": "build/runtime", "to": "runtime" },
-    { "from": "build/externals", "to": "externals" }
+    { "from": "build/externals", "to": "externals" },
+    { "from": "resources/icon.png", "to": "icon.png" }
   ],
   "win": {
     "target": [{ "target": "nsis", "arch": ["x64"] }],

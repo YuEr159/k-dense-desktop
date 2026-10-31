@@ -19,6 +19,7 @@ import { getModelRegistry, modelRefAvailable } from "../agent/session-registry.t
 import { reconcileVerifierModels, verifierAgentNames } from "../agent/verifier-models.ts";
 import { listProjects, resolvePaths } from "../projects.ts";
 import { DEFAULT_IMAGE_MODELS, imageModelIssue, listImageModels } from "../agent/image-tool.ts";
+import { readShellSettings, writeShellSettings } from "../shell-settings.ts";
 
 export interface RegisterAppSettingsRoutesOptions {
   /** Agent dir holding kady-settings.json (tests point this at a temp dir). */
@@ -38,6 +39,26 @@ export async function registerAppSettingsRoutes(
     models: await listImageModels(getModelRegistry()),
     builtIn: [...DEFAULT_IMAGE_MODELS],
   }));
+
+  // Shell preferences (currently just what closing the window does). They live
+  // in `<dataRoot>/shell.json`, which the Electron main process owns; the UI
+  // reaches them through here because the renderer has no preload bridge and
+  // no direct file access.
+  app.get("/settings/shell", async () => readShellSettings());
+
+  app.put<{ Body: { closeAction?: unknown } }>("/settings/shell", async (req, reply) => {
+    const action = req.body?.closeAction;
+    if (action !== undefined && action !== "tray" && action !== "quit") {
+      reply.code(400);
+      return { detail: 'closeAction must be "tray" or "quit"' };
+    }
+    const next = writeShellSettings(action ? { closeAction: action } : {});
+    if (!next) {
+      reply.code(409);
+      return { detail: "shell.json is not valid JSON; fix or delete it before changing settings" };
+    }
+    return next;
+  });
 
   app.put<{ Body: AppDefaultsPatch }>("/settings/defaults", async (req, reply) => {
     const error = validateAppDefaultsPatch(req.body);
