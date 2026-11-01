@@ -609,7 +609,6 @@
   "Kady briefs this specialist and checks its handoff before replying.": "Kady 会向该专家交代背景，并在回复前检查其交接结果。",
   "Kady brings your own model access. Sign in with a subscription you already have, paste an API key, or run a model locally — credentials stay on this machine.": "Kady 使用你自己的模型访问权限。用已有订阅登录、粘贴 API 密钥，或在本地运行模型——凭据都留在本机。",
   "Kady follows this skill's instructions on every message until you remove it.": "Kady 会在每条消息上遵循该技能的指令，直到你移除它。",
-  "Kady is bring-your-own-model: sign in with a subscription you already have, paste an API key, or point it at a local server. Credentials stay on this machine (keys in": "Kady 采用自带模型模式：用已有订阅登录、粘贴 API 密钥，或指向本地服务器。凭据留在本机（密钥保存在",
   "Kady reads a compact snapshot of each picked chat, taken when you send.": "Kady 会读取每个所选对话的紧凑快照，在你发送时截取。",
   "Kady reads a compact snapshot of this chat, taken when the message is sent.": "Kady 会读取本对话的紧凑快照，在消息发送时截取。",
   "Kady reads picked records with notebook_search before relying on them.": "Kady 在依赖所选记录前会用 notebook_search 读取它们。",
@@ -1648,5 +1647,11 @@
   "Remove queued message {0}": "删除待发消息 {0}",
   "Toggle {0}": "切换 {0}",
   "Edit {0}": "编辑 {0}",
-  "Any OpenAI- or Anthropic-compatible endpoint (a lab vLLM box, an institutional gateway) with its own pricing and context metadata. References become {0}; usage is billed at the cost you declare and counts toward the spend cap.": "任何兼容 OpenAI 或 Anthropic 的端点（实验室的 vLLM 机器、机构网关），自带定价与上下文元数据。模型引用写作 {0}；用量按你声明的成本计费，并计入支出上限。"
+  "Any OpenAI- or Anthropic-compatible endpoint (a lab vLLM box, an institutional gateway) with its own pricing and context metadata. References become {0}; usage is billed at the cost you declare and counts toward the spend cap.": "任何兼容 OpenAI 或 Anthropic 的端点（实验室的 vLLM 机器、机构网关），自带定价与上下文元数据。模型引用写作 {0}；用量按你声明的成本计费，并计入支出上限。",
+  "Kady is bring-your-own-model: sign in with a subscription you already have, paste an API key, or point it at a local server. Credentials stay on this machine (keys in {0}, sign-ins in Kady's Pi credential store) — nothing is sent to K-Dense.": "Kady 采用自带模型模式：用已有订阅登录、粘贴 API 密钥，或指向本地服务器。凭据全部留在本机（密钥保存在 {0}，登录凭证保存在 Kady 的 Pi 凭据库）——不会发送给 K-Dense。",
+  "LM Studio, vLLM, llama.cpp server, text-generation-webui — anything serving /v1/models. vLLM's default port (8000) collides with Kady's backend, so move one of them. Leave unset to use {0}. Stored as {1} in .env.": "LM Studio、vLLM、llama.cpp server、text-generation-webui——任何提供 /v1/models 的服务。vLLM 的默认端口（8000）与 Kady 后端冲突，请改动其中之一。留空则使用 {0}。以 {1} 存入 .env。",
+  "Run `ollama serve` and pull a model. Leave unset to use {0}. Stored as {1} in .env.": "运行 `ollama serve` 并拉取一个模型。留空则使用 {0}。以 {1} 存入 .env。",
+  "What a project's first chat tab starts with. A new tab opened next to an existing one copies that tab's choices instead, and runs Kady starts on its own (schedules, system turns) reuse the project's latest chat model, falling back to this default. Specialists have their own default under": "项目第一个聊天标签页的默认设置。在已有标签页旁边新开的标签页会沿用那个标签页的选择；Kady 自行发起的运行（定时任务、系统轮次）则复用项目最近一次聊天所用的模型，取不到时才回落到这里的默认值。专家在",
+  "Remote targets need Modal connected under": "远程算力目标需要先到",
+  "; runs fall back to the local sandbox otherwise.": "连接 Modal；否则运行会回落到本地沙箱。"
 }

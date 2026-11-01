@@ -222,6 +222,37 @@ describe("translateSubtree", () => {
     expect(host.textContent).toBe("开");
   });
 
+  it("drops the space that separated English copy from the control it ends on", () => {
+    // `Specialists have their own default under <SettingsLink/>.` renders the
+    // link as a <button>, so the copy is matched as a prefix. The English
+    // trailing space exists only to separate "under" from the link; Chinese
+    // ends the clause on the widget, and keeping it reads as "专家默认在 专家".
+    const local = buildMatcher({
+      "Specialists have their own default under": "专家在",
+    });
+    const host = document.createElement("div");
+    host.innerHTML =
+      "<p>Specialists have their own default under <button>Specialists</button>.</p>";
+
+    apply(translateSubtree(host, local, noSkip));
+
+    const p = host.querySelector("p")!;
+    // No gap between the translated prefix and the button's own label, but the
+    // button and the sentence's full stop both survive.
+    expect(p.textContent).toBe("专家在Specialists.");
+    expect(p.querySelector("button")).not.toBeNull();
+  });
+
+  it("keeps a trailing space when the translation ends in Latin text", () => {
+    // The same rule must not eat the separator when the copy ends in a Latin
+    // word that the control continues, e.g. a product name before a link.
+    const local = buildMatcher({ "Run it in": "Run it in" });
+    const host = document.createElement("div");
+    host.innerHTML = "<p>Run it in <button>Kady</button>.</p>";
+    apply(translateSubtree(host, local, noSkip));
+    expect(host.querySelector("p")!.textContent).toBe("Run it in Kady.");
+  });
+
   it("translates a text field's placeholder but never its content", () => {
     // The composer is a `<textarea>`, which the walker rejects wholesale so
     // the user's typed text is never rewritten. The placeholder is UI copy,

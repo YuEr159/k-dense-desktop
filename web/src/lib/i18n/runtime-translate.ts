@@ -362,21 +362,28 @@ function rebuildPreservingInline(
   // behind, so let it handle this one.
   if (!flattened.hasMarkup && !flattened.stopAt) return false;
 
+  // The trailing space separated the English copy from the control it labels
+  // ("…under <button>"); Chinese ends the clause on the widget, so keeping it
+  // leaves a gap in the middle of the sentence ("专家在 专家").
+  const body = flattened.stopAt
+    ? translated.replace(/([　-鿿＀-￯])[ \t]+$/, "$1")
+    : translated;
+
   const nodes: Node[] = [];
   let cursor = 0;
   const pattern = /\{(\d+)\}/g;
-  let match: RegExpExecArray | null = pattern.exec(translated);
+  let match: RegExpExecArray | null = pattern.exec(body);
   while (match) {
     if (match.index > cursor) {
-      nodes.push(document.createTextNode(translated.slice(cursor, match.index)));
+      nodes.push(document.createTextNode(body.slice(cursor, match.index)));
     }
     const source = flattened.inline.find((entry) => entry.index === Number(match![1]));
     if (source) nodes.push(source.node);
     cursor = match.index + match[0].length;
     match = pattern.exec(translated);
   }
-  if (cursor < translated.length) {
-    nodes.push(document.createTextNode(translated.slice(cursor)));
+  if (cursor < body.length) {
+    nodes.push(document.createTextNode(body.slice(cursor)));
   }
 
   // The copy ended at a form control: keep it and everything after it, or the
