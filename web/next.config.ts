@@ -34,6 +34,13 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: __dirname,
   },
+  // Next's dev server treats the hostname it bound to as the only same-origin
+  // one, and blocks `/_next/*` (HMR, and the client entry chunks) for every
+  // other spelling of loopback. The desktop shell navigates to
+  // `http://127.0.0.1:3000` while the dev server reports `localhost:3000`, so
+  // the page rendered its server HTML and then never hydrated — a permanent
+  // "Loading projects…". Both spellings reach the same backend, so allow both.
+  allowedDevOrigins: ["localhost", "127.0.0.1", "[::1]"],
   env: {
     NEXT_PUBLIC_APP_VERSION: readAppVersion(),
   },
