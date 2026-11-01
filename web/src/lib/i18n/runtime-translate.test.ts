@@ -186,6 +186,42 @@ describe("translateSubtree", () => {
     expect(host.textContent).toBe("oneand more");
   });
 
+  it("translates a label's copy and leaves the control it labels intact", () => {
+    // `<label>API key (literal, <code>$ENV_VAR</code>, …) <input/> <button/></label>`
+    // is the shape every labelled form field takes. Refusing the label because
+    // it holds a control left all of them English.
+    const local = buildMatcher({
+      "API key (literal, {0}, or empty for a keyless server)":
+        "API 密钥（明文字面值、{0}，无密钥服务器留空）",
+    });
+    const host = document.createElement("div");
+    host.innerHTML =
+      '<label>API key (literal, <code>$ENV_VAR</code>, or empty for a keyless server)' +
+      '<input value="" /><button type="button">Remove saved key</button></label>';
+    const label = host.querySelector("label")!;
+
+    apply(translateSubtree(host, local, noSkip));
+
+    expect(label.textContent).toBe(
+      "API 密钥（明文字面值、$ENV_VAR，无密钥服务器留空）Remove saved key",
+    );
+    // The field and the button must survive: they are what the label is for.
+    expect(label.querySelector("input")).not.toBeNull();
+    expect(label.querySelector("button")).not.toBeNull();
+    expect(label.querySelector("code")!.textContent).toBe("$ENV_VAR");
+  });
+
+  it("does not translate a label whose control comes first", () => {
+    // Nothing precedes the control, so there is no copy to match; the per-node
+    // pass still handles any trailing text on its own.
+    const local = buildMatcher({ "on": "开" });
+    const host = document.createElement("div");
+    host.innerHTML = "<label><input type='checkbox' />on</label>";
+    apply(translateSubtree(host, local, noSkip));
+    expect(host.querySelector("input")).not.toBeNull();
+    expect(host.textContent).toBe("开");
+  });
+
   it("translates a text field's placeholder but never its content", () => {
     // The composer is a `<textarea>`, which the walker rejects wholesale so
     // the user's typed text is never rewritten. The placeholder is UI copy,

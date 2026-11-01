@@ -214,7 +214,16 @@ export function translateSubtree(
     if (translated === inline.text) continue;
 
     const rebuilt = rebuildPreservingInline(element, inline, translated);
-    if (rebuilt) continue;
+    if (rebuilt) {
+      // The prefix was rewritten; its old text nodes are gone. Mark whatever
+      // came before a preserved control so the per-node pass below does not
+      // translate the new Chinese text a second time.
+      for (const child of parts) {
+        if (inline.stopAt && child === inline.stopAt) break;
+        if (child.nodeType === Node.TEXT_NODE) merged.add(child as Text);
+      }
+      continue;
+    }
 
     // No inline markup: collapse the pure-text run into one node. React
     // re-renders from its own model on the next update, restoring the parts.
@@ -264,11 +273,22 @@ export function translateSubtree(
 const INLINE_TAGS = new Set(["KBD", "CODE", "STRONG", "EM", "B", "I", "U", "S", "SPAN", "A", "MARK", "SMALL", "SUP", "SUB"]);
 
 /**
+ * Elements that end a label's text rather than belonging to it.
+ *
+ * `<label>API key (literal, <code>$ENV_VAR</code>, …) <input/> <button/></label>`
+ * is the common shape: the copy comes first, then the control the label is for.
+ * Matching must stop at the control instead of refusing the whole label, or
+ * every labelled form field would stay English.
+ */
+const CONTROL_TAGS = new Set(["INPUT", "TEXTAREA", "SELECT", "BUTTON"]);
+
+/**
  * Flatten an element's inline content into one string for matching.
  *
  * Returns `null` when the element contains anything that is not text or inline
  * markup — a block child (`<div>`, `<ul>`) is a different sentence, and joining
- * across it would match one sentence against two.
+ * across it would match one sentence against two. A form control ends the
+ * sentence for the same reason: what follows it is a widget, not more copy.
  *
  * Each inline element is recorded so a replacement can put it back. The
  * dictionary key carries a `{n}` where each inline element sat, which lets the
@@ -277,10 +297,13 @@ const INLINE_TAGS = new Set(["KBD", "CODE", "STRONG", "EM", "B", "I", "U", "S", 
 function flattenInline(element: Element): {
   text: string;
   hasMarkup: boolean;
+  /** Set when the copy ended at a form control; only the prefix is rewritten. */
+  stopAt: Node | null;
   inline: { index: number; node: Element; text: string }[];
 } | null {
   const inline: { index: number; node: Element; text: string }[] = [];
   let text = "";
+  let stopAt: Node | null = null;
 
   const visit = (node: Node): boolean => {
     if (node.nodeType === Node.TEXT_NODE) {
@@ -289,24 +312,31 @@ function flattenInline(element: Element): {
     }
     if (node.nodeType !== Node.ELEMENT_NODE) return false;
     const el = node as Element;
+    // A control after some copy: keep what came before it. A control with no
+    // copy ahead of it is the whole element's job and belongs to the per-node
+    // pass, not here.
+    if (CONTROL_TAGS.has(el.tagName)) {
+      if (!text.trim()) return false;
+      stopAt = el;
+      return false;
+    }
     if (!INLINE_TAGS.has(el.tagName)) return false;
     // Skip what the layer must not read through, e.g. a `<code>` holding a
     // command: it is still part of the sentence visually, so keep it as
     // placeholder text rather than refusing the whole element.
-    if (SKIP_TAGS.has(el.tagName) || el.matches(SKIP_SELECTOR)) {
-      text += `{${inline.length}}`;
-      inline.push({ index: inline.length, node: el, text: el.textContent ?? "" });
-      return true;
-    }
     text += `{${inline.length}}`;
     inline.push({ index: inline.length, node: el, text: el.textContent ?? "" });
     return true;
   };
 
   for (const child of element.childNodes) {
-    if (!visit(child)) return null;
+    if (!visit(child)) {
+      // A non-inline element is fatal unless it was a control we stopped at.
+      if (stopAt) break;
+      return null;
+    }
   }
-  return { text, hasMarkup: inline.length > 0, inline };
+  return { text, hasMarkup: inline.length > 0, stopAt, inline };
 }
 
 /**
@@ -322,11 +352,15 @@ function rebuildPreservingInline(
   flattened: {
     text: string;
     hasMarkup: boolean;
+    stopAt: Node | null;
     inline: { index: number; node: Element; text: string }[];
   },
   translated: string,
 ): boolean {
-  if (!flattened.hasMarkup) return false;
+  // Plain text with no placeholders and no control to preserve: the caller's
+  // textContent path is simpler and does not create nodes it would then leave
+  // behind, so let it handle this one.
+  if (!flattened.hasMarkup && !flattened.stopAt) return false;
 
   const nodes: Node[] = [];
   let cursor = 0;
@@ -343,6 +377,16 @@ function rebuildPreservingInline(
   }
   if (cursor < translated.length) {
     nodes.push(document.createTextNode(translated.slice(cursor)));
+  }
+
+  // The copy ended at a form control: keep it and everything after it, or the
+  // replacement would delete the field the label describes.
+  if (flattened.stopAt) {
+    const tail: Node[] = [];
+    for (let node: Node | null = flattened.stopAt; node; node = node.nextSibling) {
+      tail.push(node);
+    }
+    nodes.push(...tail);
   }
 
   element.replaceChildren(...nodes);
