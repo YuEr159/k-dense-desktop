@@ -10,7 +10,7 @@
  * renderer is a real Chromium page talking to the same origins the browser
  * build expects.
  */
-import { app, BrowserWindow, dialog, Menu, nativeImage, shell, Tray } from "electron";
+import { app, BrowserWindow, dialog, Menu, nativeImage, Notification, shell, Tray } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -77,6 +77,84 @@ function closeAction() {
   return value === "quit" ? "quit" : "tray";
 }
 
+/** Whether a finished turn should raise a desktop notification. */
+function notifySettings() {
+  const s = readShellSettings();
+  return {
+    enabled: s.notifyOnRunComplete === true,
+    // Default on: a notification for the chat already on screen is noise.
+    onlyWhenUnfocused: s.notifyOnlyWhenUnfocused !== false,
+  };
+}
+
+/**
+ * Watch for turns finishing and tell the user when the app is in the
+ * background.
+ *
+ * The backend already reports which sessions have a run in flight
+ * (`/runtime-status`), so completion is the transition from "something
+ * running" to "nothing running" — no backend change, and it covers runs this
+ * window did not start (scheduled runs, runs in another tab).
+ *
+ * Polled rather than pushed: there is no renderer-side notification bridge
+ * here on purpose (the page is an unmodified sandboxed web app), and this is a
+ * 5-second check against a local server, not a network call.
+ */
+function startRunWatcher() {
+  let previous = null;
+  let inFlight = false;
+
+  const tick = async () => {
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      const res = await fetch(`${BACKEND_URL}/runtime-status`, {
+        signal: AbortSignal.timeout(3000),
+      });
+      if (!res.ok) return;
+      const body = await res.json();
+      const running = Array.isArray(body?.sessions) ? body.sessions : [];
+      const count = typeof body?.runningSessions === "number" ? body.runningSessions : running.length;
+
+      if (previous !== null && previous > 0 && count === 0) {
+        const { enabled, onlyWhenUnfocused } = notifySettings();
+        const focused = Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused());
+        if (enabled && (!onlyWhenUnfocused || !focused)) {
+          raiseRunCompleteNotification(previous);
+        }
+      }
+      previous = count;
+    } catch {
+      // The backend may still be starting or momentarily busy; the next tick
+      // retries. Resetting `previous` would make the next completion look like
+      // the first observation and get skipped.
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  void tick();
+  const timer = setInterval(() => void tick(), 5000);
+  timer.unref?.();
+  return timer;
+}
+
+/** One notification per completion, collapsing a burst into a count. */
+function raiseRunCompleteNotification(finishedCount) {
+  if (!Notification.isSupported()) return;
+  // Clicking the balloon should land in the app, not dismiss and do nothing.
+  const notification = new Notification({
+    title: finishedCount > 1 ? `${finishedCount} chats finished` : "Chat finished",
+    body:
+      finishedCount > 1
+        ? "Your runs are done — open Kady to read the replies."
+        : "Your reply is ready — open Kady to read it.",
+    silent: false,
+  });
+  notification.on("click", () => void reopenWindow());
+  notification.show();
+}
+
 function writeShellSetting(key, value) {
   let current = {};
   try {
@@ -110,6 +188,59 @@ function runtimeArtifacts() {
   return packagedArtifacts(process.resourcesPath) ?? {};
 }
 
+/**
+ * The application menu.
+ *
+ * The window is a web app: every feature lives in the page, so the default
+ * menu's File/Edit/View items are mostly noise. It still has to exist, though,
+ * because Chromium routes its editing accelerators (Ctrl+C/V/X/Z/A) and zoom
+ * through menu roles — with no menu at all, Ctrl+V stops working in every text
+ * field, which this app is full of.
+ *
+ * So: a complete role-based menu, hidden from the window. Shortcuts keep
+ * working; the menu bar does not take a strip off the top of the app. Alt
+ * reveals it, the platform convention on Windows and Linux.
+ */
+function buildApplicationMenu() {
+  const template = [
+    {
+      label: "File",
+      submenu: [{ role: "quit", label: "Quit" }],
+    },
+    {
+      label: "Edit",
+      submenu: [
+        { role: "undo" },
+        { role: "redo" },
+        { type: "separator" },
+        { role: "cut" },
+        { role: "copy" },
+        { role: "paste" },
+        { role: "selectAll" },
+      ],
+    },
+    {
+      label: "View",
+      submenu: [
+        { role: "reload" },
+        { role: "forceReload" },
+        { role: "toggleDevTools" },
+        { type: "separator" },
+        { role: "resetZoom" },
+        { role: "zoomIn" },
+        { role: "zoomOut" },
+        { type: "separator" },
+        { role: "togglefullscreen" },
+      ],
+    },
+    {
+      label: "Window",
+      submenu: [{ role: "minimize" }, { role: "close" }],
+    },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1440,
@@ -119,6 +250,9 @@ function createWindow() {
     backgroundColor: "#0b0b0c",
     show: false,
     title: "K-Dense BYOK",
+    // Hidden, not absent: see buildApplicationMenu. `autoHideMenuBar` also lets
+    // Alt reveal it for anyone who wants the reload or devtools entries.
+    autoHideMenuBar: true,
     // A packaged build reads the exe's own icon; this is what the taskbar and
     // window switch to during development, when there is no exe icon to embed.
     ...(isDev ? { icon: path.join(import.meta.dirname, "resources", "icon.png") } : {}),
@@ -132,6 +266,8 @@ function createWindow() {
       spellcheck: true,
     },
   });
+
+  mainWindow.setMenuBarVisibility(false);
 
   mainWindow.once("ready-to-show", () => mainWindow?.show());
   mainWindow.on("closed", () => {
@@ -274,20 +410,20 @@ async function bootServices() {
     });
     quitting = true;
     app.quit();
-    return false;
+    return { ok: false, detail: blocking.join("\n\n") };
   }
   if (warnings.length) {
     console.warn(warnings.join("\n"));
   }
 
   servicesStarted = true;
-  return startServices({ dataRoot: dataRoot(), ...artifacts });
+  const result = await startServices({ dataRoot: dataRoot(), ...artifacts });
+  return result;
 }
 
-/**
- * Open the window. When the services are still coming up this shows the
- * progress splash; a window opened later goes straight to the app because the
- * backend is already answering.
+/** Open the window. When the services are still coming up this shows the
+ *  progress splash; a window opened later goes straight to the app because the
+ *  backend is already answering.
  */
 async function openWindow() {
   if (mainWindow) {
@@ -320,17 +456,19 @@ async function backendAnswers() {
 }
 
 async function boot() {
-  const ready = await bootServices();
+  const result = await bootServices();
   if (quitting) return;
-  if (!ready) {
+  if (!result?.ok) {
     await dialog.showMessageBox({
       type: "error",
       title: "K-Dense BYOK could not start",
       message: "The local services did not become ready.",
-      detail: isDev
-        ? "Check the terminal output for the failing service. If dependencies are missing, " +
-          "run `npm install` in server/ and web/, then try again."
-        : "Check that no other program is using ports 3000 or 8000, then restart the app.",
+      detail:
+        result?.detail ??
+        (isDev
+          ? "Check the terminal output for the failing service. If dependencies are missing, " +
+            "run `npm install` in server/ and web/, then try again."
+          : "Check that no other program is using ports 3000 or 8000, then restart the app."),
     });
     app.quit();
     return;
@@ -362,10 +500,16 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.whenReady().then(async () => {
+    // Install the menu before the first window: roles are what give Chromium
+    // its Ctrl+C/V and zoom accelerators.
+    buildApplicationMenu();
     // The tray exists from the start so a window close lands in a running
     // shell rather than orphaning the process with no way back.
     if (closeAction() === "tray") createTray();
     await boot();
+    // Started after boot: before that there is no backend to ask, and the
+    // first observation would be a false "nothing running".
+    startRunWatcher();
   }).catch((error) => {
     console.error("boot failed:", error);
     app.quit();

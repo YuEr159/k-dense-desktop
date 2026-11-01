@@ -14,7 +14,9 @@
  * working without patching them.
  */
 import { spawn } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
+import net from "node:net";
 import path from "node:path";
 import process from "node:process";
 
@@ -26,6 +28,39 @@ export const BACKEND_URL = `http://127.0.0.1:${BACKEND_PORT}`;
 const children = new Set();
 let shuttingDown = false;
 let fatalHandler = null;
+
+/**
+ * Random per-launch token the backend echoes from `/health`.
+ *
+ * Waiting for the URL to answer is not enough: if another program (a dev
+ * server, a second copy of the app) already listens on the port, our own child
+ * dies with EADDRINUSE and the probe still succeeds against *that* program.
+ * The window then opens against someone else's backend — usually one whose
+ * projects directory is elsewhere, so the UI sits on "Loading" forever with no
+ * error anywhere. Matching this token proves the reply came from the process we
+ * started.
+ */
+const LAUNCH_TOKEN = crypto.randomUUID();
+
+/** Set once a startup-time child exits; checked by the readiness loop. */
+let childFailure = null;
+
+/** Set when a port is closed but answered by a process we did not spawn. */
+let portConflict = null;
+
+/** Flips once startServices() has both services answering. */
+let servicesReady = false;
+
+function consumeStartupProblem() {
+  const problem = childFailure
+    ? { kind: "child", ...childFailure }
+    : portConflict
+      ? { kind: "port", label: portConflict }
+      : null;
+  childFailure = null;
+  portConflict = null;
+  return problem;
+}
 
 /** Repo root: the desktop/ directory sits directly under it. */
 export const repoRoot = path.resolve(import.meta.dirname, "..");
@@ -60,15 +95,44 @@ function spawnService(label, file, args, cwd, env) {
 
   child.once("error", (err) => {
     console.error(`[${label}] failed to start: ${err.message}`);
+    if (!shuttingDown && !childFailure) childFailure = { label, message: err.message };
   });
   child.once("exit", (code, signal) => {
     children.delete(child);
     if (!shuttingDown) {
       console.error(`[${label}] exited (code=${code} signal=${signal})`);
+      // During startup this is the difference between "the window opens onto a
+      // working app" and "the window opens onto nothing". Record it so the
+      // readiness loop can fail immediately and report which service died
+      // instead of polling a port some other program may be answering on.
+      if (!childFailure && !servicesReady) {
+        childFailure = { label, code, signal };
+      }
       fatalHandler?.();
     }
   });
   return child;
+}
+
+/**
+ * Is something already listening on `port`?
+ *
+ * Checked *before* spawning: our child would otherwise die with EADDRINUSE a
+ * second later, and the failure used to surface as a successful startup
+ * against the other program. Probing first lets the shell name the port and
+ * say what to do about it.
+ */
+function portInUse(port) {
+  return new Promise((resolve) => {
+    const socket = net.connect({ port, host: "127.0.0.1" });
+    const done = (inUse) => {
+      socket.destroy();
+      resolve(inUse);
+    };
+    socket.once("connect", () => done(true));
+    socket.once("error", () => done(false));
+    socket.setTimeout(1000, () => done(false));
+  });
 }
 
 /**
@@ -231,12 +295,48 @@ function startFrontendFromStandalone(standaloneDir, env) {
   );
 }
 
-async function waitFor(url, label, timeoutMs) {
+/**
+ * Does this `/health` body come from the backend we started?
+ *
+ * Exported so the startup tests can check the rule directly. A reply without a
+ * token, or with a different one, belongs to another program on the port.
+ */
+export function healthBelongsToLaunch(body, expected = LAUNCH_TOKEN) {
+  return Boolean(body) && body.launchToken === expected;
+}
+
+async function waitFor(url, label, timeoutMs, { expectToken = false } = {}) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (shuttingDown) return false;
+    if (childFailure) {
+      const { label: failed, code, message } = childFailure;
+      console.error(
+        `[${label}] aborting: ${failed} exited during startup ` +
+          (message ? `(${message})` : `(code=${code}).`),
+      );
+      return false;
+    }
     try {
-      await fetch(url, { signal: AbortSignal.timeout(2000) });
+      const res = await fetch(url, { signal: AbortSignal.timeout(2000) });
+      if (!res.ok) {
+        // Something answered, but not a healthy instance. Keep waiting: our own
+        // child may simply not be listening yet.
+        await new Promise((r) => setTimeout(r, 500));
+        continue;
+      }
+      if (expectToken) {
+        const body = await res.json().catch(() => null);
+        if (!healthBelongsToLaunch(body)) {
+          // A server is up on our port, but it is not the one we started.
+          portConflict = label;
+          console.error(
+            `[${label}] port ${BACKEND_PORT} is answered by another process ` +
+              `(no launch token); refusing to treat it as ready.`,
+          );
+          return false;
+        }
+      }
       return true;
     } catch {
       await new Promise((r) => setTimeout(r, 500));
@@ -263,6 +363,30 @@ export async function startServices({
 }) {
   fs.mkdirSync(dataRoot, { recursive: true });
   const env = commonEnv(dataRoot, modelsCatalogue, externalsDir);
+  // The backend echoes this from /health so the readiness probe can tell our
+  // child apart from whatever else might already own the port.
+  env.KADY_LAUNCH_TOKEN = LAUNCH_TOKEN;
+
+  // Refuse to start onto an occupied port. Spawning anyway would kill our own
+  // child (EADDRINUSE) while leaving the other program answering, which is the
+  // failure this whole check exists to prevent.
+  const busy = [];
+  if (await portInUse(BACKEND_PORT)) busy.push(BACKEND_PORT);
+  if (await portInUse(FRONTEND_PORT)) busy.push(FRONTEND_PORT);
+  if (busy.length) {
+    const ports = busy.join(" and ");
+    const detail =
+      `Port ${ports} ${busy.length > 1 ? "are" : "is"} already in use, so Kady's own ` +
+      `service could not start.\n\n` +
+      `This is usually another copy of Kady, a development server, or a ` +
+      `program left running in the background. Close it and start Kady again.\n\n` +
+      `To find the program: open Command Prompt and run\n` +
+      busy.map((p) => `    netstat -ano | findstr :${p}`).join("\n") +
+      `\n\nThe last column is the process ID; match it in Task Manager's ` +
+      `Details tab.`;
+    console.error(`[startup] ${ports} already in use`);
+    return { ok: false, detail };
+  }
 
   if (backendBundle && standaloneDir) {
     startBackendFromBundle(backendBundle, env);
@@ -272,9 +396,47 @@ export async function startServices({
     startFrontendFromSource(env);
   }
 
-  const backendUp = await waitFor(`${BACKEND_URL}/health`, "backend", 120_000);
-  const frontendUp = await waitFor(`${UI_URL}/`, "frontend", 180_000);
-  return backendUp && frontendUp;
+  const backendUp = await waitFor(`${BACKEND_URL}/health`, "backend", 120_000, {
+    expectToken: true,
+  });
+  const frontendUp = backendUp
+    ? await waitFor(`${UI_URL}/`, "frontend", 180_000)
+    : false;
+
+  if (backendUp && frontendUp) {
+    servicesReady = true;
+    return { ok: true };
+  }
+
+  const problem = consumeStartupProblem();
+  return { ok: false, detail: describeStartupProblem(problem) };
+}
+
+/** Turn a recorded startup failure into something a user can act on. */
+function describeStartupProblem(problem) {
+  if (!problem) {
+    return (
+      "A local service did not become ready in time.\n\n" +
+      "The application log has the details. Common causes are a slow disk on " +
+      "first launch, antivirus scanning the install directory, or an " +
+      "incomplete installation — reinstalling usually clears the last one."
+    );
+  }
+  if (problem.kind === "port") {
+    return (
+      `Port ${BACKEND_PORT} was answered by a program Kady did not start, so ` +
+      `the window would have shown someone else's data.\n\n` +
+      `Close the other program and start Kady again. To find it, run\n` +
+      `    netstat -ano | findstr :${BACKEND_PORT}\n` +
+      `in Command Prompt and match the last column in Task Manager's Details tab.`
+    );
+  }
+  const why = problem.message ?? `exit code ${problem.code}`;
+  const hint =
+    problem.label === "backend"
+      ? "The backend's own message is in the application log (Help → Open logs)."
+      : "The frontend's own message is in the application log (Help → Open logs).";
+  return `Kady's ${problem.label} stopped during startup (${why}).\n\n${hint}`;
 }
 
 export async function stopServices() {

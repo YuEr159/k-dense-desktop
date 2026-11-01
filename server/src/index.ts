@@ -174,8 +174,17 @@ export async function buildApp() {
   // shallow probe it always was; `setup` reports work that runs in the
   // background after the port is listening, so the window can say what it is
   // waiting for instead of showing an unchanging "Starting…".
+  //
+  // `launchToken` is echoed so the desktop shell can prove the reply came from
+  // the child it spawned. Without it, a stale process already on the port makes
+  // the probe succeed against a different backend — one whose projects live
+  // elsewhere — and the UI waits forever on a screen that never loads. Absent
+  // when the backend is started by hand (no token in the environment).
   app.get("/health", async () => ({
     status: "ok",
+    ...(process.env.KADY_LAUNCH_TOKEN
+      ? { launchToken: process.env.KADY_LAUNCH_TOKEN }
+      : {}),
     setup: {
       helpers: {
         state: helperVenvState().state,

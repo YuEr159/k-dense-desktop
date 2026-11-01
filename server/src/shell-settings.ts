@@ -19,9 +19,23 @@ export interface ShellSettings {
   closeAction: "tray" | "quit";
   /** Whether the first-close tray balloon has been shown. */
   trayHintShown?: boolean;
+  /** Show a desktop notification when a turn finishes. Off unless chosen. */
+  notifyOnRunComplete?: boolean;
+  /**
+   * Only notify when the window is not focused.
+   *
+   * On by default with `notifyOnRunComplete`: a notification for a chat the
+   * user is already reading is noise, and noise is what teaches people to turn
+   * the feature off.
+   */
+  notifyOnlyWhenUnfocused?: boolean;
 }
 
-const DEFAULTS: ShellSettings = { closeAction: "tray" };
+const DEFAULTS: ShellSettings = {
+  closeAction: "tray",
+  notifyOnRunComplete: false,
+  notifyOnlyWhenUnfocused: true,
+};
 
 /** The file itself; kept as a function so tests can point KADY_DATA_ROOT at a temp dir. */
 function settingsPath(): string {
@@ -35,6 +49,10 @@ export function readShellSettings(): ShellSettings {
     return {
       ...raw,
       closeAction: raw.closeAction === "quit" ? "quit" : "tray",
+      // Booleans are normalised explicitly so a hand-edited "true" string or a
+      // missing key cannot make the shell disagree with the settings UI.
+      notifyOnRunComplete: raw.notifyOnRunComplete === true,
+      notifyOnlyWhenUnfocused: raw.notifyOnlyWhenUnfocused !== false,
     };
   } catch {
     return { ...DEFAULTS };
@@ -58,6 +76,12 @@ export function writeShellSettings(patch: Partial<ShellSettings>): ShellSettings
   const next = {
     ...current,
     ...(patch.closeAction ? { closeAction: patch.closeAction } : {}),
+    ...(typeof patch.notifyOnRunComplete === "boolean"
+      ? { notifyOnRunComplete: patch.notifyOnRunComplete }
+      : {}),
+    ...(typeof patch.notifyOnlyWhenUnfocused === "boolean"
+      ? { notifyOnlyWhenUnfocused: patch.notifyOnlyWhenUnfocused }
+      : {}),
   };
   try {
     fs.mkdirSync(path.dirname(settingsPath()), { recursive: true });

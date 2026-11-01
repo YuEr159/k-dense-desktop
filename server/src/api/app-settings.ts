@@ -46,13 +46,33 @@ export async function registerAppSettingsRoutes(
   // no direct file access.
   app.get("/settings/shell", async () => readShellSettings());
 
-  app.put<{ Body: { closeAction?: unknown } }>("/settings/shell", async (req, reply) => {
+  app.put<{
+    Body: {
+      closeAction?: unknown;
+      notifyOnRunComplete?: unknown;
+      notifyOnlyWhenUnfocused?: unknown;
+    };
+  }>("/settings/shell", async (req, reply) => {
     const action = req.body?.closeAction;
     if (action !== undefined && action !== "tray" && action !== "quit") {
       reply.code(400);
       return { detail: 'closeAction must be "tray" or "quit"' };
     }
-    const next = writeShellSettings(action ? { closeAction: action } : {});
+    const notify = req.body?.notifyOnRunComplete;
+    if (notify !== undefined && typeof notify !== "boolean") {
+      reply.code(400);
+      return { detail: "notifyOnRunComplete must be a boolean" };
+    }
+    const onlyUnfocused = req.body?.notifyOnlyWhenUnfocused;
+    if (onlyUnfocused !== undefined && typeof onlyUnfocused !== "boolean") {
+      reply.code(400);
+      return { detail: "notifyOnlyWhenUnfocused must be a boolean" };
+    }
+    const next = writeShellSettings({
+      ...(action ? { closeAction: action } : {}),
+      ...(typeof notify === "boolean" ? { notifyOnRunComplete: notify } : {}),
+      ...(typeof onlyUnfocused === "boolean" ? { notifyOnlyWhenUnfocused: onlyUnfocused } : {}),
+    });
     if (!next) {
       reply.code(409);
       return { detail: "shell.json is not valid JSON; fix or delete it before changing settings" };

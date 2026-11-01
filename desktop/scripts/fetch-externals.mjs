@@ -88,6 +88,18 @@ function pruneList(root) {
   const mingw = mingwDir(root);
   return [
     "usr/share/vim", // editor runtime, ~23 MB of ex/vi/view aliases
+    // The editor itself. Pruning only `share/vim` left six ~3.8 MB launchers
+    // behind that nothing in Kady can invoke: they exist for a human who wants
+    // to edit a file, which the agent does with its own tools.
+    "usr/bin/vim.exe",
+    "usr/bin/vimdiff.exe",
+    "usr/bin/view.exe",
+    "usr/bin/ex.exe",
+    "usr/bin/rview.exe",
+    "usr/bin/rvim.exe",
+    "usr/bin/gvim.exe",
+    "usr/bin/vimtutor.exe",
+    "usr/bin/vimrun.exe",
     "usr/share/mintty", // terminal emulator for the GUI launchers
     "usr/share/doc",
     "usr/share/man",

@@ -27,13 +27,22 @@ export function AppearancePanel() {
   const [closeAction, setCloseAction] = useState<CloseAction>(
     DEFAULT_SHELL_SETTINGS.closeAction,
   );
+  const [notify, setNotify] = useState({
+    onComplete: DEFAULT_SHELL_SETTINGS.notifyOnRunComplete,
+    onlyWhenUnfocused: DEFAULT_SHELL_SETTINGS.notifyOnlyWhenUnfocused,
+  });
   const [shellError, setShellError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     getShellSettings()
       .then((settings) => {
-        if (!cancelled) setCloseAction(settings.closeAction);
+        if (cancelled) return;
+        setCloseAction(settings.closeAction);
+        setNotify({
+          onComplete: settings.notifyOnRunComplete,
+          onlyWhenUnfocused: settings.notifyOnlyWhenUnfocused,
+        });
       })
       .catch((error: Error) => {
         if (!cancelled) setShellError(error.message);
@@ -53,6 +62,26 @@ export function AppearancePanel() {
       setShellError(error.message);
     });
   }, [closeAction]);
+
+  const pickNotify = useCallback(
+    (patch: { onComplete?: boolean; onlyWhenUnfocused?: boolean }) => {
+      const previous = notify;
+      const next = {
+        onComplete: patch.onComplete ?? notify.onComplete,
+        onlyWhenUnfocused: patch.onlyWhenUnfocused ?? notify.onlyWhenUnfocused,
+      };
+      setNotify(next);
+      setShellError(null);
+      putShellSettings({
+        notifyOnRunComplete: next.onComplete,
+        notifyOnlyWhenUnfocused: next.onlyWhenUnfocused,
+      }).catch((error: Error) => {
+        setNotify(previous);
+        setShellError(error.message);
+      });
+    },
+    [notify],
+  );
 
   const closeOptions: { value: CloseAction; label: string; hint: string }[] = [
     {
@@ -147,6 +176,56 @@ export function AppearancePanel() {
               </div>
             </button>
           ))}
+        </div>
+        {shellError ? <SettingsError>{shellError}</SettingsError> : null}
+      </div>
+
+      <div className="flex flex-col gap-3">
+        <SettingsHeader
+          title="Finished runs"
+          description="A long run can finish while you are working elsewhere. A system notification tells you it is ready."
+          appliesTo="immediately"
+        />
+        <div className="flex flex-col gap-2">
+          <button
+            type="button"
+            onClick={() => pickNotify({ onComplete: !notify.onComplete })}
+            aria-pressed={notify.onComplete}
+            className={cn(
+              "rounded-lg border px-3 py-2.5 text-left transition-colors",
+              notify.onComplete
+                ? "border-border bg-muted/60"
+                : "border-transparent hover:border-border hover:bg-muted/30",
+            )}
+          >
+            <div className="text-xs font-medium text-foreground">
+              Notify me when a chat finishes
+            </div>
+            <div className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+              Uses the operating system&apos;s notifications. Nothing is sent
+              anywhere — the app raises them locally.
+            </div>
+          </button>
+          {notify.onComplete ? (
+            <button
+              type="button"
+              onClick={() => pickNotify({ onlyWhenUnfocused: !notify.onlyWhenUnfocused })}
+              aria-pressed={notify.onlyWhenUnfocused}
+              className={cn(
+                "ml-4 rounded-lg border px-3 py-2.5 text-left transition-colors",
+                notify.onlyWhenUnfocused
+                  ? "border-border bg-muted/60"
+                  : "border-transparent hover:border-border hover:bg-muted/30",
+              )}
+            >
+              <div className="text-xs font-medium text-foreground">
+                Only when Kady is in the background
+              </div>
+              <div className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                A notification for the chat already on screen is usually noise.
+              </div>
+            </button>
+          ) : null}
         </div>
         {shellError ? <SettingsError>{shellError}</SettingsError> : null}
       </div>
