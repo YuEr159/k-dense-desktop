@@ -79,6 +79,17 @@ export function buildMatcher(dictionary: Dictionary): {
     if (!source) continue;
     if (/\{\d+\}/.test(source)) {
       const keys: string[] = [];
+      // A template's slots hold a count, an id or a name — never a paragraph.
+      // Without a bound, `{0} of {1}` also matched any English sentence that
+      // happened to contain " of " and rewrote it from the template, so the
+      // sentence lost its own words.
+      //
+      // The bound scales with how much literal text the template contributes:
+      // a sentence-shaped key ("{0} added, {1} updated") has enough context to
+      // trust long slots, while one that is almost all slot ("{0} of {1}") can
+      // only be trusted with short ones.
+      const literalLength = source.replace(/\{\d+\}/g, "").trim().length;
+      const maxSlot = Math.max(24, Math.min(240, literalLength * 2));
       // `{n}` matches one non-greedy run. The regex is anchored, so a template
       // only ever matches the complete rendered string — a partial match would
       // rewrite a fragment of a sentence.
@@ -86,7 +97,7 @@ export function buildMatcher(dictionary: Dictionary): {
         .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
         .replace(/\\\{\s*(\d+)\s*\\\}/g, (_, n: string) => {
           keys.push(`{${n}}`);
-          return "(.+?)";
+          return `(.{1,${maxSlot}}?)`;
         });
       patterns.push({
         regex: new RegExp(`^${escaped}$`),
@@ -127,7 +138,16 @@ export function translateText(
     if (!match) continue;
     const filled = entry.value.replace(/\{(\d+)\}/g, (whole, n: string) => {
       const index = entry.keys.indexOf(`{${n}}`);
-      return index >= 0 ? (match[index + 1] ?? whole) : whole;
+      if (index < 0) return whole;
+      const captured = match[index + 1] ?? whole;
+      // A capture is spliced in verbatim, so a dictionary entry that describes
+      // the capture's own wording never gets a chance to match it. The default
+      // model label is exactly this: "Not set — Kady's default (GPT-6 Astra
+      // unless DEFAULT_MODEL_* is set in .env)" carries a sentence inside the
+      // parenthesised slot. Translate it when it has its own entry; otherwise
+      // it is a name or a number, and splitting on it would be wrong.
+      const inner = matcher.exact.get(normalise(captured));
+      return inner ?? captured;
     });
     return text.replace(normalised, filled);
   }

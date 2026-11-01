@@ -142,6 +142,34 @@ describe("translateSubtree", () => {
     );
   });
 
+  it("translates a capture that has its own entry", () => {
+    // A capture is spliced in verbatim, so wording inside the slot never gets
+    // matched on its own. The default-model label puts a whole sentence in
+    // there; a name or a number simply has no entry and passes through.
+    const local = buildMatcher({
+      "Not set — Kady's default ({0})": "未设置——使用 Kady 的默认值（{0}）",
+      "GPT-6 Astra unless DEFAULT_MODEL_* is set in .env":
+        "GPT-6 Astra（除非在 .env 中设置了 DEFAULT_MODEL_*）",
+    });
+    expect(
+      translateText(local, "Not set — Kady's default (GPT-6 Astra unless DEFAULT_MODEL_* is set in .env)"),
+    ).toBe("未设置——使用 Kady 的默认值（GPT-6 Astra（除非在 .env 中设置了 DEFAULT_MODEL_*））");
+    expect(translateText(local, "Not set — Kady's default (GPT-6 Astra)")).toBe(
+      "未设置——使用 Kady 的默认值（GPT-6 Astra）",
+    );
+  });
+
+  it("keeps a template from swallowing a whole sentence", () => {
+    // `{0} of {1}` exists for counts like "1 of 2". With an unbounded capture
+    // it also matched any English sentence containing " of " and rewrote it
+    // from the template — the local-server hint lost its own words.
+    const local = buildMatcher({ "{0} of {1}": "{0} / {1}" });
+    const sentence =
+      "LM Studio, vLLM, llama.cpp server — anything serving /v1/models, so move one of them. Leave unset to use http://localhost:1234.";
+    expect(translateText(local, sentence)).toBe(sentence);
+    expect(translateText(local, "1 of 2")).toBe("1 / 2");
+  });
+
   it("joins sibling text nodes before matching a template", () => {
     // React renders `{a} in / {b} out per 1M tok` as five sibling text nodes;
     // no single one holds the sentence the template describes.
