@@ -16,6 +16,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 import { build as esbuild } from "esbuild";
+import { copyRuntimeTree } from "./runtime-files.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const desktopRoot = path.resolve(here, "..");
@@ -47,7 +48,7 @@ function rmrf(dir) {
 }
 
 function copyDir(from, to, options = {}) {
-  fs.cpSync(from, to, { recursive: true, dereference: true, ...options });
+  copyRuntimeTree(from, to, options);
 }
 
 /** Copy a directory tree, skipping any path segment in `skip`. */
@@ -296,7 +297,7 @@ async function buildBackend() {
   let copied = 0;
   for (const [key, meta] of Object.entries(lock.packages ?? {})) {
     if (!key.startsWith("node_modules/")) continue;
-    if (meta.dev === true || meta.optional === true) continue;
+    if (meta.dev === true) continue; // installed optional packages include native runtime binaries
     const rel = key.slice("node_modules/".length);
     const from = path.join(serverRoot, key);
     if (!fs.existsSync(path.join(from, "package.json"))) continue;
@@ -332,6 +333,15 @@ async function buildBackend() {
       typeof meta.bin === "string" ? { [meta.name.split("/").pop()]: meta.bin } : meta.bin;
     if (!bins) continue;
     for (const [binName, target] of Object.entries(bins)) {
+      if (process.platform !== "win32") {
+        const destination = path.resolve(stagedNm, rel, target);
+        if (!fs.existsSync(destination)) continue;
+        const shim = path.join(binDir, binName);
+        // Relative links survive moving the app; retain executable permissions.
+        if (!fs.existsSync(shim)) fs.symlinkSync(path.relative(binDir, destination), shim);
+        fs.chmodSync(destination, fs.statSync(destination).mode | 0o111);
+        continue;
+      }
       const shim = path.join(binDir, `${binName}.cmd`);
       const depth = rel.split("/").length;
       const back = Array(depth).fill("..").join("\\");
@@ -391,6 +401,7 @@ async function main() {
   await buildBackend();
   buildFrontend();
   copyModelsCatalogue();
+  fs.writeFileSync(path.join(outDir, "build-info.json"), JSON.stringify({ platform: process.platform, arch: process.arch }) + "\n");
 
   // Guard against the failure mode where a stale per-machine environment is
   // carried into the payload: it is hundreds of MB and must be rebuilt by
