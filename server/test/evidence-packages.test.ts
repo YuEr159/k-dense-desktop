@@ -152,7 +152,10 @@ describe("reviewer evidence packages", () => {
     await expect(pruneEvidenceSnapshots(project, true)).rejects.toThrow();
     await deleteEvidencePackage(project, p.id); expect(listEvidencePackages(project).packages).toEqual([]);
   });
-  it.skipIf(!lookPath("python3"))("ships a working isolated integrity checker without executing captured scripts", async () => {
+  // Extracts the package, spawns `python3` twice and writes a tampered file in
+  // between. On a cold Windows runner the interpreter start alone eats most of
+  // the 5s default, which showed up as a flake that passed on rerun.
+  it.skipIf(!lookPath("python3"))("ships a working isolated integrity checker without executing captured scripts", { timeout: 30_000 }, async () => {
     file("analysis.py", "raise RuntimeError('MUST NOT RUN')"); await cite("h", "analysis.py");
     const p = await prepareEvidencePackage(project, request); const extracted = path.join(PROJECTS_ROOT, "extracted"); zipFor(p.id).extractAllTo(extracted, true);
     const output = execFileSync(lookPath("python3")!, ["-I", path.join(extracted, "verify.py")], { encoding: "utf8" });

@@ -57,7 +57,10 @@ describe("bounded robustness workflows", () => {
     await expect(service.approve(project, source, p.id, { digest: p.digest })).rejects.toMatchObject({ code: "APPROVAL_REQUIRED" });
     expect(manager.list(project)).toEqual([]);
   });
-  it("admits once, verifies uploaded bytes, uses snapshots and retains recorded outputs", async () => {
+  // Waits on two fake sandboxes plus their transfer round trips, each with its
+  // own 5s wait budget in the helper above. The default test timeout can be
+  // overtaken by that alone on a cold Windows runner.
+  it("admits once, verifies uploaded bytes, uses snapshots and retains recorded outputs", { timeout: 30_000 }, async () => {
     const p = await prepare();
     const first = await approve(p);
     expect(first.approvedAt).toBeDefined(); expect(listComputeReservations(project)).toHaveLength(2);
