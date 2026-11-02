@@ -8,6 +8,10 @@ on:
     paths: ["desktop/**", "server/**", "web/**", ".github/workflows/macos-desktop.yml"]
 permissions:
   contents: read
+# A branch push and its PR need only one build; retire superseded queues.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
 jobs:
   build:
     strategy:
@@ -48,6 +52,10 @@ jobs:
         run: npm test
       - name: Build ad-hoc signed app, DMG and ZIP
         working-directory: desktop
+        env:
+          # dist:mac explicitly uses identity "-"; no signing secrets are used.
+          # electron-builder otherwise skips even ad-hoc signing on PR builds.
+          CSC_FOR_PULL_REQUEST: "true"
         run: npm run dist:mac
       - name: Verify bundle signature
         run: codesign --verify --deep --strict dist/mac*/Kady.app
