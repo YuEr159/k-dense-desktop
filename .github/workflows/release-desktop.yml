@@ -39,7 +39,7 @@ jobs:
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-  build:
+  windows:
     needs: check
     if: needs.check.outputs.desktop == 'true'
     runs-on: windows-latest
@@ -98,5 +98,76 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/Kady-*-Setup.exe
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+
+  mac:
+    needs: check
+    if: needs.check.outputs.desktop == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    # A cold macOS runner spends most of this building the Next payload and
+    # downloading uv; the workflow's own 45-minute ceiling has been enough, so
+    # the release job uses the same one rather than a shorter guess.
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      # The matrix asserts the runner matches: an arm64 payload built on Intel
+      # (or the reverse) would install and then fail to launch.
+      - name: Verify native runner
+        run: node -e "if(process.arch !== '${{ matrix.arch }}') process.exit(1)"
+
+      - run: npm ci --no-audit
+        working-directory: server
+
+      - run: npm ci --no-audit
+        working-directory: web
+
+      - run: npm ci --no-audit
+        working-directory: desktop
+
+      - name: Stage Mac tools
+        run: node desktop/scripts/fetch-externals.mjs
+
+      # `dist:mac` pins identity to "-" (ad-hoc) and uses the entitlements that
+      # allow loading an unsigned Electron framework, so no signing secret is
+      # involved. The app is not notarized: a downloaded copy needs the
+      # Privacy & Security approval documented in desktop/MACOS.md.
+      - name: Build ad-hoc signed app, DMG and ZIP
+        working-directory: desktop
+        env:
+          CSC_FOR_PULL_REQUEST: "true"
+        run: npm run dist:mac
+
+      - name: Verify bundle signature
+        run: codesign --verify --deep --strict dist/mac*/Kady.app
+
+      - name: Upload disk image and archive to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          # electron-builder writes to the repo root (directories.output is
+          # "../dist"), not desktop/dist.
+          files: |
+            dist/Kady-*-mac-*.dmg
+            dist/Kady-*-mac-*.zip
           generate_release_notes: true
           fail_on_unmatched_files: true
