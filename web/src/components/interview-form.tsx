@@ -263,7 +263,7 @@ function OptionRow({
       </span>
       <span className="min-w-0 flex-1">
         <span className="flex flex-wrap items-center gap-2">
-          <span className="font-medium">{option.label}</span>
+          <span data-no-translate className="font-medium">{option.label}</span>
           {recommended && (
             <Badge variant="secondary" className="h-4 px-1.5 text-[10px]">
               Recommended
@@ -352,7 +352,7 @@ function QuestionCard({
           {q.type !== "info" && (
             <span className="mr-1.5 text-muted-foreground">{index + 1}.</span>
           )}
-          {q.question}
+          <span data-no-translate>{q.question}</span>
         </span>
         {q.weight === "critical" && (
           <Badge variant="destructive" className="ml-auto h-4 shrink-0 px-1.5 text-[10px]">

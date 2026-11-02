@@ -63,8 +63,9 @@ import {
 } from "@/components/ui/select";
 import { DEFAULT_PROJECT_ID, type Project } from "@/lib/projects";
 import type { ProjectActivitySummary } from "@/lib/project-activity";
-import { onOpenSettings, type OpenSettingsRequest } from "@/lib/settings-nav";
+import { onOpenSettings, readLastSettingsTab, type OpenSettingsRequest } from "@/lib/settings-nav";
 import { useProjects } from "@/lib/use-projects";
+import { useIsomorphicLayoutEffect } from "@/lib/use-isomorphic-layout-effect";
 import { cn } from "@/lib/utils";
 import { APP_VERSION, isVersioned } from "@/lib/version";
 
@@ -73,6 +74,10 @@ interface ProjectViewProps {
   projectActivities?: Readonly<Record<string, ProjectActivitySummary>>;
   /** False while hidden behind a workspace; gates the Settings deep-link listener. */
   isActive?: boolean;
+  /** The language switch reloaded while Settings was open on this screen. */
+  restoreSettingsOpen?: boolean;
+  /** Called once the restored dialog has been shown, so the shell can drop it. */
+  onRestoreSettingsHandled?: () => void;
 }
 
 type ProjectSort = "recent" | "name" | "status";
@@ -145,6 +150,8 @@ export function ProjectView({
   onOpenProject,
   projectActivities = {},
   isActive = true,
+  restoreSettingsOpen = false,
+  onRestoreSettingsHandled,
 }: ProjectViewProps) {
   const {
     projects,
@@ -161,6 +168,19 @@ export function ProjectView({
   const [mounted, setMounted] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsRequest, setSettingsRequest] = useState<OpenSettingsRequest | null>(null);
+
+  // The shell reads the restore markers in its own layout effect (it must not
+  // read `localStorage` while hydrating), so this prop arrives one render
+  // after mount rather than on the first one — a `useState` initialiser here
+  // would never see it. Opening the tab the user was on matters too: Settings
+  // keeps it in `kady:settings:lastTab`, and landing on the default tab would
+  // lose the place just as visibly as closing the dialog.
+  useIsomorphicLayoutEffect(() => {
+    if (!restoreSettingsOpen) return;
+    setSettingsRequest({ tab: readLastSettingsTab() ?? undefined });
+    setSettingsOpen(true);
+    onRestoreSettingsHandled?.();
+  }, [restoreSettingsOpen, onRestoreSettingsHandled]);
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<ProjectSort>("recent");
   const [archivedOpen, setArchivedOpen] = useState(false);

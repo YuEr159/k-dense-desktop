@@ -158,6 +158,10 @@ function TableBody({ card }: { card: TableResult }) {
                 {row.map((cell, columnIndex) => (
                   <td
                     key={card.columns[columnIndex]?.key ?? columnIndex}
+                    // A cell is a measurement or a name — a cited journal is
+                    // "Science", not "科学". Column labels are copy and stay
+                    // translatable; the data must not be.
+                    data-no-translate
                     className="max-w-64 px-2.5 py-1.5 font-mono text-[11px]"
                   >
                     {formatScalar(cell)}
@@ -349,7 +353,7 @@ function QcBody({
             <StatusLabel status={check.status} />
           </div>
           <div className="min-w-0 flex-1">
-            <div className="text-xs font-medium">{check.name}</div>
+            <div data-no-translate className="text-xs font-medium">{check.name}</div>
             {(check.value !== undefined || check.expected) && (
               <div className="mt-0.5 font-mono text-[11px] text-muted-foreground">
                 {check.value !== undefined ? formatScalar(check.value) : ""}
@@ -357,7 +361,7 @@ function QcBody({
               </div>
             )}
             {check.message && (
-              <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+              <p data-no-translate className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
                 {check.message}
               </p>
             )}
@@ -469,7 +473,7 @@ function CitationBody({ card }: { card: CitationListResult }) {
               {entry.kind}
             </span>
             <div className="min-w-0 flex-1">
-              <div className="text-xs font-medium">
+              <div data-no-translate className="text-xs font-medium">
                 {entry.title || entry.identifier}
               </div>
               {entry.title && (
@@ -714,15 +718,17 @@ export function ScientificResultCard({
           <Icon className="size-4 text-primary" />
         </span>
         <div className="min-w-0 flex-1">
+          {/* The card's type badge and status stay UI copy; the title and
+              summary are the agent's own words about the result. */}
           <div className="flex flex-wrap items-center gap-2">
-            <h3 className="text-sm font-semibold leading-tight">{card.title}</h3>
+            <h3 data-no-translate className="text-sm font-semibold leading-tight">{card.title}</h3>
             <span className="rounded-full border bg-background px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
               {label}
             </span>
             {qcOverall && <StatusLabel status={qcOverall} />}
           </div>
           {card.summary && (
-            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+            <p data-no-translate className="mt-1 text-xs leading-relaxed text-muted-foreground">
               {card.summary}
             </p>
           )}

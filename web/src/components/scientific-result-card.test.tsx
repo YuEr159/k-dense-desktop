@@ -47,6 +47,28 @@ describe("ScientificResultCard", () => {
     expect(screen.getByText(/Showing 1 of 200 rows/)).toBeInTheDocument();
   });
 
+  it("marks table data as not translatable", () => {
+    // The runtime translator rewrites any text node whose content matches a
+    // dictionary key, and "Science" is one (the field in Settings). A cited
+    // journal is data, so a cell must opt out — while the column label, which
+    // is copy, stays translatable.
+    renderCard({
+      schemaVersion: 1,
+      kind: "table",
+      title: "Top venues",
+      columns: [
+        { key: "venue", label: "Journal" },
+        { key: "count", label: "Papers" },
+      ],
+      rows: [["Science", 2]],
+    });
+    const cell = screen.getByText("Science").closest("td");
+    expect(cell).toHaveAttribute("data-no-translate");
+    expect(screen.getByText("Journal").closest("th")).not.toHaveAttribute(
+      "data-no-translate",
+    );
+  });
+
   it("renders statistical tests without claiming verification", () => {
     renderCard({
       schemaVersion: 1,

@@ -234,9 +234,15 @@ const ToolCard = memo(function ToolCard({ item }: { item: ActivityItem }) {
         ) : (
           <ToolIcon toolName={item.toolName} />
         )}
+        {/* The tool name stays UI copy; everything the call produced — the
+            command, its arguments, its output — is data, and a filename or a
+            cited journal must not come back translated. */}
         <span className="font-medium text-foreground">{name}</span>
         {summary && (
-          <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground">
+          <span
+            data-no-translate
+            className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground"
+          >
             {summary}
           </span>
         )}
@@ -263,6 +269,7 @@ const ToolCard = memo(function ToolCard({ item }: { item: ActivityItem }) {
                   {item.status === "error" ? "Error" : "Output"}
                 </div>
                 <pre
+                  data-no-translate
                   className={cn(
                     "max-h-72 overflow-auto rounded bg-muted/50 p-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-words",
                     item.status === "error" ? "text-destructive" : "text-foreground",
@@ -366,7 +373,7 @@ export function NotebookEntryChip({
       <BookOpenIcon className="size-3.5 shrink-0 text-orange-500" />
       <span className="font-medium text-foreground">Notebook · {typeLabel}</span>
       {title && (
-        <span className="min-w-0 flex-1 truncate text-muted-foreground">{title}</span>
+        <span data-no-translate className="min-w-0 flex-1 truncate text-muted-foreground">{title}</span>
       )}
       <StatusDot status={item.status} />
       {onView && (
@@ -408,7 +415,12 @@ export function ReasoningBlock({ reasoning }: { reasoning: string }) {
         <span>Reasoning</span>
       </CollapsibleTrigger>
       <CollapsibleContent>
-        <div className="mt-1 border-l-2 border-muted pl-3 text-xs leading-relaxed text-muted-foreground whitespace-pre-wrap">
+        {/* The model's reasoning is its own words, like the answer it leads to
+            — a protein named "Science" must not be localised. */}
+        <div
+          data-no-translate
+          className="mt-1 border-l-2 border-muted pl-3 text-xs leading-relaxed text-muted-foreground whitespace-pre-wrap"
+        >
           {reasoning}
         </div>
       </CollapsibleContent>

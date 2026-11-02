@@ -405,6 +405,20 @@ export function parseWorkspaceMetadata(serialized: string | null): StoredWorkspa
   }
 }
 
+/**
+ * The last shell state, read synchronously.
+ *
+ * `loadWorkspaceSnapshot` is async because it hydrates attachment blobs, so a
+ * screen restored from it can only be applied after a first paint — which is
+ * what made a language switch flash the project overview on its way back to
+ * the workspace. The shell state itself is plain localStorage, so the first
+ * render can start where the user left off instead of catching up.
+ */
+export function readShellStateSync(): { screen: WorkspaceScreen; openedProjectIds: string[] } {
+  const metadata = readMetadata();
+  return { screen: metadata.screen, openedProjectIds: metadata.openedProjectIds };
+}
+
 export function pruneWorkspaceMetadata(
   metadata: StoredWorkspaceMetadata,
   validProjectIds: Iterable<string>,

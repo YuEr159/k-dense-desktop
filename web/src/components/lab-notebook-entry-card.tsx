@@ -312,6 +312,7 @@ export function LabNotebookEntryCard({
               "text-[13px] font-medium leading-snug",
               superseded && "line-through decoration-muted-foreground/50",
             )}
+            data-no-translate
           >
             {entry.title}
           </CardTitle>

@@ -31,6 +31,16 @@ const EVENT = "kady:locale";
  */
 const RESTORE_SCREEN_KEY = "kady:locale:restore-screen";
 
+/**
+ * Which modal the user had open when they switched language.
+ *
+ * The switch reloads, so an open Settings dialog would otherwise be gone when
+ * the page comes back — the one piece of "where I was" that the screen and
+ * project list do not cover. Only `settings` exists today; the value is stored
+ * rather than a bare flag so a future modal can reuse the key.
+ */
+const RESTORE_DIALOG_KEY = "kady:locale:restore-dialog";
+
 /** Chinese when the browser prefers it, since that is the shipped dictionary. */
 export function detectLocale(): Locale {
   if (typeof navigator === "undefined") return "zh-CN";
@@ -55,6 +65,10 @@ export function writeLocale(locale: Locale): void {
     // Read once and cleared by the shell on the next mount, so it can only
     // ever affect the reload this call is about to trigger.
     localStorage.setItem(RESTORE_SCREEN_KEY, "1");
+    // Language is switched from Settings → Appearance, so the dialog is open
+    // by definition. Recording it here rather than asking the caller keeps the
+    // two markers from drifting apart.
+    localStorage.setItem(RESTORE_DIALOG_KEY, "settings");
   } catch {
     // A failed write only means the choice does not survive a reload.
   }
@@ -81,6 +95,26 @@ export function consumeScreenRestoreRequest(): boolean {
     return true;
   } catch {
     return false;
+  }
+}
+
+/**
+ * The dialog the user had open across a language switch, clearing the marker
+ * so exactly one load reopens it.
+ *
+ * Separate from `consumeScreenRestoreRequest` because the shell reads the
+ * screen in a `useState` initialiser and the dialog in another: one call each,
+ * and neither must depend on the other's ordering.
+ */
+export function consumeDialogRestoreRequest(): "settings" | null {
+  if (typeof localStorage === "undefined") return null;
+  try {
+    const value = localStorage.getItem(RESTORE_DIALOG_KEY);
+    if (value !== "settings") return null;
+    localStorage.removeItem(RESTORE_DIALOG_KEY);
+    return "settings";
+  } catch {
+    return null;
   }
 }
 

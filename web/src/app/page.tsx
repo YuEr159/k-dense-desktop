@@ -18,7 +18,7 @@ import { APP_VERSION, isVersioned, useUpdateCheck } from "@/lib/version";
 import { useSkills } from "@/lib/use-skills";
 import { flattenFiles, flattenFolders, useSandbox } from "@/lib/use-sandbox";
 import { ProjectScopeProvider } from "@/lib/projects";
-import { consumeScreenRestoreRequest } from "@/lib/i18n/locale";
+import { consumeDialogRestoreRequest, consumeScreenRestoreRequest } from "@/lib/i18n/locale";
 import {
   hasProjectActivity,
   sameProjectActivity,
@@ -26,7 +26,7 @@ import {
   type ProjectActivitySummary,
 } from "@/lib/project-activity";
 import { onChatPrefill } from "@/lib/chat-prefill";
-import { onOpenSettings, type OpenSettingsRequest } from "@/lib/settings-nav";
+import { onOpenSettings, readLastSettingsTab, type OpenSettingsRequest } from "@/lib/settings-nav";
 import {
   OPEN_MODAL_JOB_EVENT,
   type ModalComputeScope,
@@ -48,6 +48,7 @@ import {
   deletePersistedChatState,
   loadWorkspaceSnapshot,
   pruneDeletedProjectState,
+  readShellStateSync,
   revokeSnapshotObjectUrls,
   saveProjectWorkspaceState,
   saveWorkspaceShellState,
@@ -57,6 +58,7 @@ import {
   type WorkspaceScreen,
 } from "@/lib/workspace-persistence";
 import { seedChatStateFromTab } from "@/lib/new-tab-state";
+import { useIsomorphicLayoutEffect } from "@/lib/use-isomorphic-layout-effect";
 import {
   useCallback,
   useEffect,
@@ -112,8 +114,49 @@ function ResizeHandle({ onMouseDown }: { onMouseDown: (e: React.MouseEvent) => v
 }
 
 export default function HomePage() {
+  // The reload a language switch triggers must reopen where the user was, and
+  // it has to do so without a visible flash. Both constraints push the read
+  // out of a `useState` initialiser: the first render is also the hydration
+  // pass, so reading `localStorage` there made the client render the workspace
+  // around server HTML that described the overview, which React reports as a
+  // hydration mismatch and refuses to patch. A layout effect runs after
+  // hydration but before the browser paints, so the restore lands on the first
+  // frame the user can see. A plain launch or refresh has no marker and still
+  // starts on the overview.
   const [screen, setScreen] = useState<WorkspaceScreen>("projects");
   const [openedProjectIds, setOpenedProjectIds] = useState<string[]>([]);
+  const [restoreRequested, setRestoreRequested] = useState(false);
+  // Which surface owns the restored dialog. A screen id rather than a boolean:
+  // the dialog must reopen where the user left it, and — because switching to
+  // the other surface later in the session must not pop it again — the value
+  // is claimed by exactly one owner.
+  const [restoreSettingsFor, setRestoreSettingsFor] = useState<
+    "projects" | "workspace" | null
+  >(null);
+
+  useIsomorphicLayoutEffect(() => {
+    const shell = readShellStateSync();
+    const restoreWorkspace =
+      consumeScreenRestoreRequest() &&
+      shell.screen === "workspace" &&
+      shell.openedProjectIds.length > 0;
+    if (restoreWorkspace) {
+      setRestoreRequested(true);
+      setScreen("workspace");
+      setOpenedProjectIds(shell.openedProjectIds);
+    }
+    if (consumeDialogRestoreRequest() === "settings") {
+      // Settings is only ever opened from one surface, so the restored screen
+      // is the owner — and it has to reuse the same test, or a workspace that
+      // could not be restored would hand the dialog to a surface not mounted.
+      setRestoreSettingsFor(restoreWorkspace ? "workspace" : "projects");
+    }
+  }, []);
+
+  // One owner claims the restored dialog and reports back, so a later switch
+  // to the other surface does not reopen it.
+  const clearRestoreSettings = useCallback(() => setRestoreSettingsFor(null), []);
+
   const [restoredProjects, setRestoredProjects] = useState<
     Record<string, ProjectWorkspaceState>
   >({});
@@ -149,19 +192,19 @@ export default function HomePage() {
         return;
       }
       setRestoredProjects(snapshot.projects);
-      // Reopening the screen is reserved for the reload a language switch
-      // triggers (see lib/i18n/locale.ts): that reload must not read as losing
-      // your place. A normal launch or refresh still starts on the overview.
-      if (consumeScreenRestoreRequest() && snapshot.openedProjectIds.length > 0) {
+      // The screen itself was already restored synchronously above; this only
+      // re-applies the project list once the snapshot confirms which projects
+      // still exist, so a project deleted between the two reads cannot
+      // resurrect as an empty workspace.
+      if (restoreRequested && snapshot.openedProjectIds.length > 0) {
         setOpenedProjectIds(snapshot.openedProjectIds);
-        setScreen("workspace");
       }
       setWorkspaceHydrated(true);
     });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [restoreRequested]);
 
   const rememberProject = useCallback((projectId: string) => {
     setOpenedProjectIds((prev) => (
@@ -255,6 +298,8 @@ export default function HomePage() {
           isActive={screen === "projects"}
           onOpenProject={openProject}
           projectActivities={displayedProjectActivities}
+          restoreSettingsOpen={restoreSettingsFor === "projects"}
+          onRestoreSettingsHandled={clearRestoreSettings}
         />
       </div>
       {projectDirectoryHydrated && openedProjectIds.map((projectId) => {
@@ -267,6 +312,8 @@ export default function HomePage() {
                 isActive={isActive}
                 hydrated={workspaceHydrated}
                 initialState={restoredProjects[projectId]}
+                restoreSettingsOpen={restoreSettingsFor === "workspace" && isActive}
+                onRestoreSettingsHandled={clearRestoreSettings}
                 onProjectActivityChange={handleProjectActivityChange}
                 onOpenProjectView={() => setScreen("projects")}
               />
@@ -283,6 +330,8 @@ function WorkspacePage({
   isActive,
   hydrated,
   initialState,
+  restoreSettingsOpen,
+  onRestoreSettingsHandled,
   onProjectActivityChange,
   onOpenProjectView,
 }: {
@@ -290,6 +339,10 @@ function WorkspacePage({
   isActive: boolean;
   hydrated: boolean;
   initialState?: ProjectWorkspaceState;
+  /** The language switch reloaded while Settings was open in this workspace. */
+  restoreSettingsOpen?: boolean;
+  /** Called once the restored dialog has been shown, so the shell can drop it. */
+  onRestoreSettingsHandled?: () => void;
   onProjectActivityChange: (
     projectId: string,
     activity: ProjectActivitySummary,
@@ -329,6 +382,17 @@ function WorkspacePage({
   const toggleChat = useCallback(() => setChatOpen((value) => !value), []);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsRequest, setSettingsRequest] = useState<OpenSettingsRequest | null>(null);
+
+  // Same reason as ProjectView: the restore marker is read in the shell's
+  // layout effect, one render after mount, so this prop is not available to a
+  // `useState` initialiser. The tab is restored too — a dialog on its default
+  // tab loses the place the user was reading.
+  useIsomorphicLayoutEffect(() => {
+    if (!restoreSettingsOpen) return;
+    setSettingsRequest({ tab: readLastSettingsTab() ?? undefined });
+    setSettingsOpen(true);
+    onRestoreSettingsHandled?.();
+  }, [restoreSettingsOpen, onRestoreSettingsHandled]);
   const [showNotebook, setShowNotebook] = useState(
     () => initialState?.showNotebook ?? false,
   );

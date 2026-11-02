@@ -8,6 +8,7 @@ import {
   parseWorkspaceMetadata,
   pruneDeletedProjectState,
   pruneWorkspaceMetadata,
+  readShellStateSync,
   revokeSnapshotObjectUrls,
   saveProjectWorkspaceState,
   saveWorkspaceShellState,
@@ -135,6 +136,23 @@ describe("workspace persistence schema", () => {
       screen: "projects",
       openedProjectIds: [],
     });
+  });
+
+  it("reads the shell state synchronously, without waiting for blobs", async () => {
+    // The language switch reloads, and the restored screen has to be right in
+    // the first render — `loadWorkspaceSnapshot` waits on attachment blobs, so
+    // a restore driven from it painted the project overview first and jumped.
+    await saveProjectWorkspaceState("project-a", projectState);
+    await saveWorkspaceShellState("workspace", ["project-a"]);
+
+    expect(readShellStateSync()).toEqual({
+      screen: "workspace",
+      openedProjectIds: ["project-a"],
+    });
+  });
+
+  it("reads an empty shell state before anything was saved", () => {
+    expect(readShellStateSync()).toEqual({ screen: "projects", openedProjectIds: [] });
   });
 
   it("repairs corrupt tabs, selections, and panel sizes", () => {
