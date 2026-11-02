@@ -1,6 +1,6 @@
 {
   "name": "kady-desktop",
-  "version": "0.15.0-mac.1",
+  "version": "0.15.0d3",
   "private": true,
   "type": "module",
   "description": "Electron desktop shell for K-Dense BYOK",
