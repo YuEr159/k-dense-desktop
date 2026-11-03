@@ -6,7 +6,10 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { runtimeEnvironment, executable, portHelp } from "../runtime-env.mjs";
 
-test("Finder environment discovers tools without evaluating shell startup files", () => {
+// macOS-only assertions. The portable halves of this file live in
+// platform-agnostic.test.mjs so a Windows runner can exercise them too — this
+// suite only runs where the paths it asserts are the ones the code produces.
+test("Finder environment discovers tools without evaluating shell startup files", { skip: process.platform !== "darwin" }, () => {
   const env = runtimeEnvironment({ platform: "darwin", externalsDir: "/Applications/Kady App.app/Contents/Resources/externals", env: { HOME: "/Users/test", PATH: "/usr/bin:/bin" } });
   assert.equal(env.PATH.split(":")[0], "/Applications/Kady App.app/Contents/Resources/externals/bin");
   for (const dir of ["/opt/homebrew/bin", "/usr/local/bin", "/Users/test/.local/bin", "/usr/bin", "/bin"]) assert.ok(env.PATH.split(":").includes(dir));

@@ -31,6 +31,17 @@ const children = new Set();
 const processGroups = new Set();
 let shuttingDown = false;
 let fatalHandler = null;
+/**
+ * Where each service line also goes, besides the terminal.
+ *
+ * Set by the entry point to the log file. Left as a hook rather than a direct
+ * import so this module stays testable without a data directory.
+ */
+let lineSink = null;
+
+export function setServiceLogSink(sink) {
+  lineSink = sink;
+}
 
 /**
  * Random per-launch token the backend echoes from `/health`.
@@ -91,12 +102,25 @@ function spawnService(label, file, args, cwd, env) {
   children.add(child);
   if (process.platform !== "win32" && child.pid) processGroups.add(child.pid);
 
+  // One line goes to the terminal (a source checkout still has one) and to the
+  // log file (a packaged app has no terminal at all). A packaged launch that
+  // never starts is diagnosable only from the second.
   const forward = (stream, sink) => {
     stream.setEncoding("utf8");
-    stream.on("data", (chunk) => sink(chunk.trimEnd()));
+    stream.on("data", (chunk) => {
+      const text = chunk.trimEnd();
+      if (!text) return;
+      if (lineSink) {
+        // The sink owns both destinations, so the line lands once rather than
+        // being written here and then mirrored by the console hook.
+        lineSink(label, text, sink);
+      } else {
+        sink(`[${label}] ${text}`);
+      }
+    });
   };
-  forward(child.stdout, (line) => console.log(`[${label}] ${line}`));
-  forward(child.stderr, (line) => console.error(`[${label}] ${line}`));
+  forward(child.stdout, (line) => console.log(line));
+  forward(child.stderr, (line) => console.error(line));
 
   child.once("error", (err) => {
     console.error(`[${label}] failed to start: ${err.message}`);
@@ -425,7 +449,12 @@ export async function startServices({
   return { ok: false, detail: describeStartupProblem(problem) };
 }
 
-/** Turn a recorded startup failure into something a user can act on. */
+/**
+ * Turn a recorded startup failure into something a user can act on.
+ *
+ * Every branch ends by naming the log file: a packaged app has no terminal,
+ * and that file is the only place the failing service's own output survives.
+ */
 function describeStartupProblem(problem) {
   if (!problem) {
     return (
@@ -445,8 +474,8 @@ function describeStartupProblem(problem) {
   const why = problem.message ?? `exit code ${problem.code}`;
   const hint =
     problem.label === "backend"
-      ? "The backend's own message is in the application log (Help → Open logs)."
-      : "The frontend's own message is in the application log (Help → Open logs).";
+      ? "The backend's own message is in the application log (Help → Open logs folder)."
+      : "The frontend's own message is in the application log (Help → Open logs folder).";
   return `Kady's ${problem.label} stopped during startup (${why}).\n\n${hint}`;
 }
 

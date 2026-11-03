@@ -61,6 +61,30 @@ jobs:
         working-directory: web
         run: npm run test
 
+  desktop:
+    name: desktop shell (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows is the primary release platform, but the shell's tests used
+        # to run only inside the macOS build workflow. The suite here is the
+        # platform-agnostic half; macOS-only assertions stay in
+        # macos-desktop.yml, where the paths they check actually apply.
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      # The shell has no runtime dependencies; skipping install keeps this job
+      # to a few seconds and avoids a lockfile check for a package tree the
+      # tests never import.
+      - name: Run shell tests
+        working-directory: desktop
+        run: node --test test/platform-agnostic.test.mjs test/window-state.test.mjs test/packaging.test.mjs test/startup.test.mjs test/runtime-files.test.mjs test/icon.test.mjs
+
   launcher-smoke:
     name: launcher --check (${{ matrix.os }})
     strategy:

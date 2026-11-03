@@ -49,6 +49,36 @@ async function main() {
   fs.writeFileSync(path.join(resourcesDir, "icon.png"), square);
   console.log(`icon.png ${CANVAS}x${CANVAS}`);
 
+  // macOS menu-bar template image: the app's own mark as a pure-black alpha
+  // mask. The system recolours it for light/dark menu bars and inverts it on
+  // click, which a colour icon cannot do — and at 16pt a colour logo is an
+  // unreadable smudge. Authored at 32px for a 16pt slot (`@2x`), and named
+  // with the `Template` suffix macOS requires to treat it as one.
+  //
+  // The shape has to come from luminance, not from the source alpha: the brand
+  // PNG is a fully opaque greyscale mark on a white field, so its alpha is 255
+  // everywhere and would produce a solid black square. Inverting luminance
+  // gives ink where the mark is and transparency where the page was.
+  for (const [suffix, size] of [["", 32], ["@2x", 64]]) {
+    const { data, info } = await sharp(square)
+      .resize(size, size, { fit: "contain", background: { r: 255, g: 255, b: 255, alpha: 1 } })
+      .flatten({ background: "#ffffff" })
+      .greyscale()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    const out = Buffer.alloc(info.width * info.height * 4);
+    for (let i = 0, p = 0; i < data.length; i += 1, p += 4) {
+      out[p] = 0; out[p + 1] = 0; out[p + 2] = 0;
+      // 255 (white) -> 0 (clear); 0 (ink) -> 255 (opaque black).
+      out[p + 3] = 255 - data[i];
+    }
+    const mask = await sharp(out, { raw: { width: info.width, height: info.height, channels: 4 } })
+      .png()
+      .toBuffer();
+    fs.writeFileSync(path.join(resourcesDir, `iconTemplate${suffix}.png`), mask);
+  }
+  console.log("iconTemplate.png 32x32, iconTemplate@2x.png 64x64");
+
   if (process.platform === "darwin") {
     const iconset = path.join(resourcesDir, "icon.iconset");
     fs.mkdirSync(iconset, { recursive: true });
