@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
 
 import { build as esbuild } from "esbuild";
 import { copyRuntimeTree } from "./runtime-files.mjs";
+import { declaredResourceDirs, omitFromBundle } from "./bundle-filter.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const desktopRoot = path.resolve(here, "..");
@@ -61,36 +62,6 @@ function copyDirSkipping(from, to, skip) {
     if (entry.isDirectory()) copyDirSkipping(src, dst, skip);
     else fs.copyFileSync(src, dst);
   }
-}
-
-/**
- * Should this path inside a dependency be left out of the payload?
- *
- * The installer's cost is dominated by file count, not bytes: 31k files in
- * `node_modules` and every one of them gets created, written and scanned by
- * antivirus on the user's machine. These classes are the ones a running
- * dependency never reads.
- *
- *  - `.map` — read only by a debugger attached to third-party code.
- *  - Markdown — documentation. Licences are deliberately kept: dropping those
- *    is a licensing problem, not a size optimisation, and several packages
- *    ship `LICENSE.md` with no extensionless copy.
- *  - Test files — `__tests__/` directories and `*.test.*` / `*.spec.*`. A
- *    package's top-level `test/` is *not* dropped even though it usually holds
- *    only tests: a few older packages keep fixtures there that runtime code
- *    reads, and the whole point of this filter is to be safe.
- */
-const OMITTED_DOC = /\.(md|markdown)$/i;
-const KEPT_DOC = /^(licen[cs]e|copying|notice|third[-_]?part(y|ies)|authors|contributors)/i;
-const OMITTED_TEST_FILE = /\.(test|spec)\.[cm]?[jt]sx?$/i;
-
-function omitFromBundle(src) {
-  const base = path.basename(src);
-  const stat = fs.statSync(src, { throwIfNoEntry: false });
-  if (stat?.isDirectory()) return base === "__tests__";
-  if (base.endsWith(".map")) return true;
-  if (OMITTED_DOC.test(base)) return !KEPT_DOC.test(base);
-  return OMITTED_TEST_FILE.test(base);
 }
 
 /** Every .ts/.mts under `dir`, paired with its compiled output path. */
@@ -303,11 +274,15 @@ async function buildBackend() {
     if (!fs.existsSync(path.join(from, "package.json"))) continue;
     const to = path.join(stagedNm, rel);
     fs.mkdirSync(path.dirname(to), { recursive: true });
+    // Which markdown in this package is content rather than documentation.
+    // Nested packages keep their own root below, so a nested copy of the same
+    // name is judged against its own manifest.
+    const resourceDirs = declaredResourceDirs(from, rel.split("/node_modules/").pop());
     copyDir(from, to, {
       filter: (src) => {
         if (src === from) return true;
         try {
-          return !omitFromBundle(src);
+          return !omitFromBundle(src, resourceDirs);
         } catch {
           // A broken symlink or a file vanishing mid-copy: keep whatever comes
           // next rather than failing the build over one weird package.
