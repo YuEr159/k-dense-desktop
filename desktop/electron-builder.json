@@ -14,6 +14,7 @@
     "runtime-env.mjs",
     "shell-i18n.mjs",
     "shell-log.mjs",
+    "page-locale.mjs",
     "window-state.mjs",
     "package.json"
   ],

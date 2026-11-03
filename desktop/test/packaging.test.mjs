@@ -68,7 +68,7 @@ test("the shell's own modules are all packaged", () => {
   }
   // The modules this pass added, by name: a rename that misses this list is
   // exactly the mistake worth catching.
-  for (const module of ["shell-i18n.mjs", "shell-log.mjs", "window-state.mjs"]) {
+  for (const module of ["shell-i18n.mjs", "shell-log.mjs", "page-locale.mjs", "window-state.mjs"]) {
     assert.ok(files.includes(module), `${module} is imported but not in "files"`);
   }
 });

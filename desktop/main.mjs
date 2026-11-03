@@ -26,8 +26,9 @@ import {
 } from "./service-manager.mjs";
 import { checkRuntime } from "./preflight.mjs";
 import { runtimeEnvironment } from "./runtime-env.mjs";
-import { appName, setLanguageFromLocale, t } from "./shell-i18n.mjs";
+import { appName, currentLanguage, setLanguageFromLocale, t } from "./shell-i18n.mjs";
 import { captureConsole, logPath, logsDirectory, logServiceLine, openLog, write as logLine } from "./shell-log.mjs";
+import { fallbackLocale, readPageLocale } from "./page-locale.mjs";
 import { restoreWindowState as restoreSavedWindowState, windowStateToSave } from "./window-state.mjs";
 
 const isDev = !app.isPackaged;
@@ -392,6 +393,44 @@ async function openLogsFolder() {
 }
 
 /**
+ * Which language the shell should speak right now.
+ *
+ * Reads the page's stored choice, falling back to the system locale only when
+ * there is none (first launch) — the same order the page's own `readLocale()`
+ * uses, so the two agree on a fresh install as well as after a switch.
+ */
+async function resolveShellLanguage() {
+  const stored = await readPageLocale(UI_URL);
+  return stored ?? fallbackLocale(app.getLocale());
+}
+
+/** Re-read the page's language, then apply it to everything the shell draws. */
+let refreshingLanguage = false;
+async function refreshShellLanguage() {
+  // `refreshShellLanguage` opens a hidden window, and any window's load events
+  // would call this again. Cheap guard rather than reasoning about which
+  // events the probe can emit.
+  if (refreshingLanguage) return;
+  refreshingLanguage = true;
+  try {
+    const next = await resolveShellLanguage();
+    if (next === currentLanguage()) return;
+    setLanguageFromLocale(next);
+    // The menu and tray hold their labels as strings, so they have to be
+    // rebuilt rather than re-rendered.
+    buildApplicationMenu();
+    if (tray) {
+      tray.destroy();
+      tray = null;
+      createTray();
+    }
+    logLine("shell", `language -> ${next}`);
+  } finally {
+    refreshingLanguage = false;
+  }
+}
+
+/**
  * The colour a window should paint before any page has rendered.
  *
  * The page follows the system theme by default, so a fixed dark background
@@ -462,6 +501,14 @@ function createWindow() {
 
   attachFailureHandling(mainWindow);
   attachContextMenu(mainWindow);
+
+  // Switching languages reloads the page (see web/src/lib/i18n/locale.ts),
+  // and the shell's menu and tray are drawn outside it. Re-reading after the
+  // reload keeps them in step without polling or a change hook the page would
+  // have to call.
+  mainWindow.webContents.on("did-finish-load", () => {
+    void refreshShellLanguage();
+  });
 
   // Chat content, citations and notebook links open in the user's browser.
   // Everything pointing back at the local UI stays inside the app.
@@ -736,6 +783,10 @@ async function openWindow() {
     mainWindow.focus();
     return mainWindow;
   }
+  // A window reopened after the user switched languages in Settings has to
+  // speak the new one. The page has already written the choice by then, and
+  // the probe is cheap when the frontend is up.
+  if (servicesStarted) await refreshShellLanguage();
   const window = createWindow();
 
   const backendReady = servicesStarted && (await backendAnswers());
@@ -805,9 +856,11 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.whenReady().then(async () => {
-    // Everything user-visible in the shell resolves its language here, before
-    // the first dialog can appear.
-    setLanguageFromLocale(app.getLocale());
+    // The shell speaks whichever language the interface is in. That choice
+    // lives in the page's localStorage, so asking the system (as this used to)
+    // meant a Chinese splash over an English app whenever the two disagreed.
+    // The read is best-effort: a first launch has no stored choice yet, and
+    // the system locale is then the same fallback the page itself uses.
     openLog(dataRoot(), {
       version: app.getVersion(),
       platform: process.platform,
@@ -815,6 +868,7 @@ if (!app.requestSingleInstanceLock()) {
       locale: app.getLocale(),
       packaged: String(app.isPackaged),
     });
+    setLanguageFromLocale(await resolveShellLanguage());
     captureConsole();
     // Each service line goes to the log and to the terminal, exactly once.
     setServiceLogSink((source, text, sink) => logServiceLine(source, text, sink));

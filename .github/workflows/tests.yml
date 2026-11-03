@@ -83,7 +83,7 @@ jobs:
       # tests never import.
       - name: Run shell tests
         working-directory: desktop
-        run: node --test test/platform-agnostic.test.mjs test/window-state.test.mjs test/packaging.test.mjs test/startup.test.mjs test/runtime-files.test.mjs test/icon.test.mjs
+        run: node --test test/platform-agnostic.test.mjs test/window-state.test.mjs test/page-locale.test.mjs test/packaging.test.mjs test/startup.test.mjs test/runtime-files.test.mjs test/icon.test.mjs
 
   launcher-smoke:
     name: launcher --check (${{ matrix.os }})
