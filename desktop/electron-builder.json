@@ -11,8 +11,11 @@
     "main.mjs",
     "service-manager.mjs",
     "preflight.mjs",
-    "package.json",
-    "runtime-env.mjs"
+    "runtime-env.mjs",
+    "shell-i18n.mjs",
+    "shell-log.mjs",
+    "window-state.mjs",
+    "package.json"
   ],
   "extraResources": [
     {
@@ -26,6 +29,12 @@
     {
       "from": "resources/icon.png",
       "to": "icon.png"
+    },
+    {
+      "from": "resources",
+      "to": ".",
+      "filter": ["iconTemplate*.png"],
+      "platform": "darwin"
     },
     {
       "from": "../LICENSE",

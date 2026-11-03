@@ -10,20 +10,31 @@
  * renderer is a real Chromium page talking to the same origins the browser
  * build expects.
  */
-import { app, BrowserWindow, dialog, Menu, nativeImage, Notification, shell, Tray } from "electron";
+import { app, BrowserWindow, clipboard, dialog, Menu, nativeImage, nativeTheme, Notification, screen, shell, Tray } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
-import { BACKEND_URL, UI_URL, packagedArtifacts, setFatalHandler, startServices, stopServices } from "./service-manager.mjs";
+import {
+  BACKEND_URL,
+  UI_URL,
+  packagedArtifacts,
+  setFatalHandler,
+  setServiceLogSink,
+  startServices,
+  stopServices,
+} from "./service-manager.mjs";
 import { checkRuntime } from "./preflight.mjs";
 import { runtimeEnvironment } from "./runtime-env.mjs";
+import { appName, setLanguageFromLocale, t } from "./shell-i18n.mjs";
+import { captureConsole, logPath, logsDirectory, logServiceLine, openLog, write as logLine } from "./shell-log.mjs";
+import { restoreWindowState as restoreSavedWindowState, windowStateToSave } from "./window-state.mjs";
 
 const isDev = !app.isPackaged;
 
-// Electron derives app.getPath("userData") from the package name, which is
-// "kady-desktop" while the product is "Kady". Pin the name so a packaged app
-// and a checkout agree on where user data lives.
+// The product name feeds every dialog, menu item and notification below, so it
+// is resolved once. `app.getLocale()` reports the system language, which is the
+// only signal available before the page loads.
 app.setName("Kady");
 if (process.env.KADY_DESKTOP_USER_DATA) {
   const userData = path.resolve(process.env.KADY_DESKTOP_USER_DATA);
@@ -35,6 +46,8 @@ if (process.env.KADY_DESKTOP_USER_DATA) {
 let mainWindow = null;
 let tray = null;
 let quitting = false;
+/** Pending debounced write of the window rectangle (see scheduleWindowStateSave). */
+let windowStateTimer = null;
 /** Set once startServices() has been called; services outlive any one window. */
 let servicesStarted = false;
 
@@ -63,6 +76,59 @@ function readShellSettings() {
   } catch {
     return {};
   }
+}
+
+/**
+ * The window rectangle to reopen with, or null to use the default.
+ *
+ * Restoring a saved rectangle is only safe if a display still shows part of
+ * it: a laptop undocked from a 4K monitor would otherwise reopen a window
+ * entirely off-screen, which reads as "the app opened nothing". Intersection
+ * with the display's work area is the test, not containment — a window
+ * deliberately hanging off an edge should survive.
+ *
+ * Minimized and maximized are handled separately: `getNormalBounds()` gives
+ * the restore size, so a maximized window comes back maximized at the same
+ * size it would un-maximize to.
+ */
+function restoreWindowState() {
+  return restoreSavedWindowState(
+    readShellSettings().windowState,
+    screen.getAllDisplays().map((display) => display.workArea),
+  );
+}
+
+/** Remember the rectangle and maximized state for the next launch. */
+function saveWindowState(window) {
+  if (!window || window.isDestroyed()) return;
+  try {
+    const next = windowStateToSave({
+      normalBounds: window.getNormalBounds(),
+      maximized: window.isMaximized(),
+      fullScreen: window.isFullScreen(),
+    });
+    if (next) writeShellSetting("windowState", next);
+  } catch {
+    // Losing the saved rectangle is cosmetic; never fail a close over it.
+  }
+}
+
+/**
+ * `saveWindowState` on a trailing edge.
+ *
+ * Every resize and move fires while the user is still dragging — on Windows a
+ * resize fires per pixel. Writing `shell.json` each time would rewrite the
+ * whole file dozens of times a second from the event loop that is also
+ * compositing the drag. Half a second after the last event is soon enough for
+ * a crash to lose at most the final adjustment.
+ */
+function scheduleWindowStateSave(window) {
+  if (windowStateTimer) clearTimeout(windowStateTimer);
+  windowStateTimer = setTimeout(() => {
+    windowStateTimer = null;
+    saveWindowState(window);
+  }, 500);
+  windowStateTimer.unref?.();
 }
 
 /**
@@ -108,6 +174,7 @@ function notifySettings() {
  */
 function startRunWatcher() {
   let previous = null;
+  let previousSessions = [];
   let inFlight = false;
 
   const tick = async () => {
@@ -121,15 +188,21 @@ function startRunWatcher() {
       const body = await res.json();
       const running = Array.isArray(body?.sessions) ? body.sessions : [];
       const count = typeof body?.runningSessions === "number" ? body.runningSessions : running.length;
+      // Which chats finished, not just how many. The names are already in the
+      // response; dropping them is what made the notification say only
+      // "Chat finished" while three tabs were open.
+      const finished = previousSessions.filter((s) => !running.some((r) => r.id === s.id));
 
       if (previous !== null && previous > 0 && count === 0) {
         const { enabled, onlyWhenUnfocused } = notifySettings();
         const focused = Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused());
+        signalAttention(focused);
         if (enabled && (!onlyWhenUnfocused || !focused)) {
-          raiseRunCompleteNotification(previous);
+          raiseRunCompleteNotification(finished.length > 0 ? finished : previousSessions);
         }
       }
       previous = count;
+      previousSessions = running;
     } catch {
       // The backend may still be starting or momentarily busy; the next tick
       // retries. Resetting `previous` would make the next completion look like
@@ -145,20 +218,63 @@ function startRunWatcher() {
   return timer;
 }
 
-/** One notification per completion, collapsing a burst into a count. */
-function raiseRunCompleteNotification(finishedCount) {
+/**
+ * A taskbar/Dock hint that does not need permission and does not interrupt.
+ *
+ * `setBadgeCount` is Linux and macOS only — Windows has no badge API at all,
+ * so a background completion there is a flashing taskbar button. Both clear
+ * themselves when the window is focused, which is the moment the hint has
+ * done its job.
+ */
+function signalAttention(focused) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (focused) {
+    try { mainWindow.flashFrame(false); } catch { /* not supported */ }
+    try { app.setBadgeCount(0); } catch { /* not supported */ }
+    return;
+  }
+  if (process.platform === "win32") {
+    try { mainWindow.flashFrame(true); } catch { /* not supported */ }
+  } else {
+    // A dot with no number: the point is "look at the app", not a count.
+    try { app.setBadgeCount(1); } catch { /* no permission or not supported */ }
+  }
+}
+
+/** One notification per completion, naming the chats that finished. */
+function raiseRunCompleteNotification(finished) {
   if (!Notification.isSupported()) return;
+  const name = appName();
+  const named = (finished ?? []).map((s) => s?.name).filter(Boolean);
+  const count = finished?.length ?? 0;
+
+  let title;
+  let body;
+  if (count > 1) {
+    title = t("notify.many", { count });
+    body = named.length > 0
+      ? t("notify.bodyManyNamed", { names: summariseNames(named) })
+      : t("notify.bodyMany", { app: name });
+  } else if (count === 1 && named.length === 1) {
+    title = t("notify.oneNamed", { name: named[0] });
+    body = t("notify.bodyOneNamed", { name: named[0] });
+  } else {
+    title = t("notify.one");
+    body = t("notify.bodyOne", { app: name });
+  }
+
+  const notification = new Notification({ title, body, silent: false });
   // Clicking the balloon should land in the app, not dismiss and do nothing.
-  const notification = new Notification({
-    title: finishedCount > 1 ? `${finishedCount} chats finished` : "Chat finished",
-    body:
-      finishedCount > 1
-        ? "Your runs are done — open Kady to read the replies."
-        : "Your reply is ready — open Kady to read it.",
-    silent: false,
-  });
   notification.on("click", () => void reopenWindow());
   notification.show();
+  logLine("shell", `notification: ${title} — ${body}`);
+}
+
+/** "a, b and 3 more" — long enough to be useful, short enough to read. */
+function summariseNames(names) {
+  const shown = names.slice(0, 3);
+  const rest = names.length - shown.length;
+  return rest > 0 ? `${shown.join(", ")} +${rest}` : shown.join(", ");
 }
 
 function writeShellSetting(key, value) {
@@ -208,16 +324,28 @@ function runtimeArtifacts() {
  * reveals it, the platform convention on Windows and Linux.
  */
 function buildApplicationMenu() {
-  const quitItem = { label: "Quit Kady", accelerator: "CmdOrCtrl+Q", click: () => void quitApp() };
+  const name = appName();
+  const quitItem = { label: t("menu.quit", { app: name }), accelerator: "CmdOrCtrl+Q", click: () => void quitApp() };
+  // The Help menu is not decoration: the startup-failure dialogs send users
+  // here for the log file, so an entry that opens it has to exist. Before this
+  // it did not, and the log was never written either.
+  const helpItem = {
+    label: t("menu.help"),
+    submenu: [
+      { label: t("menu.openLogs"), click: () => void openLogsFolder() },
+      { label: t("menu.openData"), click: () => void shell.openPath(dataRoot()) },
+      ...(isDev ? [{ type: "separator" }, { role: "toggleDevTools" }] : []),
+    ],
+  };
   const template = [
     ...(process.platform === "darwin" ? [{
       label: app.name,
       submenu: [{ role: "about" }, { type: "separator" }, { role: "services" },
         { type: "separator" }, { role: "hide" }, { role: "hideOthers" },
         { role: "unhide" }, { type: "separator" }, quitItem],
-    }] : [{ label: "File", submenu: [quitItem] }]),
+    }] : [{ label: t("menu.file"), submenu: [quitItem] }]),
     {
-      label: "Edit",
+      label: t("menu.edit"),
       submenu: [
         { role: "undo" },
         { role: "redo" },
@@ -229,7 +357,7 @@ function buildApplicationMenu() {
       ],
     },
     {
-      label: "View",
+      label: t("menu.view"),
       submenu: [
         { role: "reload" },
         { role: "forceReload" },
@@ -243,22 +371,60 @@ function buildApplicationMenu() {
       ],
     },
     {
-      label: "Window",
+      label: t("menu.window"),
       submenu: [{ role: "minimize" }, { role: "close" }],
     },
+    helpItem,
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
+/** Reveal shell.log. Falls back to opening the folder if the file is missing. */
+async function openLogsFolder() {
+  const file = logPath();
+  if (file && fs.existsSync(file)) {
+    shell.showItemInFolder(file);
+    return;
+  }
+  const dir = logsDirectory(dataRoot());
+  fs.mkdirSync(dir, { recursive: true });
+  await shell.openPath(dir);
+}
+
+/**
+ * The colour a window should paint before any page has rendered.
+ *
+ * The page follows the system theme by default, so a fixed dark background
+ * showed black edges on every light-mode launch and again on each resize,
+ * before the renderer repaints. Tracking `nativeTheme` costs nothing and is
+ * the same signal the page's `prefers-color-scheme` resolves from.
+ */
+function chromeBackground() {
+  return nativeTheme.shouldUseDarkColors ? "#0b0b0c" : "#ffffff";
+}
+
+/** Apply a theme change to an already-open window. */
+function applyThemeToWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  try {
+    mainWindow.setBackgroundColor(chromeBackground());
+  } catch {
+    // Cosmetic only.
+  }
+}
+
 function createWindow() {
+  const saved = restoreWindowState();
   mainWindow = new BrowserWindow({
-    width: 1440,
-    height: 900,
+    // Defaults unless a previous session left a still-visible rectangle.
+    width: saved.bounds?.width ?? 1440,
+    height: saved.bounds?.height ?? 900,
+    ...(saved.bounds ? { x: saved.bounds.x, y: saved.bounds.y } : {}),
     minWidth: 960,
     minHeight: 640,
-    backgroundColor: "#0b0b0c",
+    backgroundColor: chromeBackground(),
     show: false,
-    title: "K-Dense BYOK",
+    title: appName(),
     // Hidden, not absent: see buildApplicationMenu. `autoHideMenuBar` also lets
     // Alt reveal it for anyone who wants the reload or devtools entries.
     autoHideMenuBar: true,
@@ -278,10 +444,24 @@ function createWindow() {
 
   mainWindow.setMenuBarVisibility(false);
 
-  mainWindow.once("ready-to-show", () => mainWindow?.show());
+  mainWindow.once("ready-to-show", () => {
+    if (!mainWindow) return;
+    if (saved.maximized) mainWindow.maximize();
+    mainWindow.show();
+  });
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
+
+  // The rectangle is remembered on every adjustment, debounced, and once more
+  // on close so the last drag is not lost to the trailing-edge timer.
+  for (const event of ["resize", "move", "maximize", "unmaximize"]) {
+    mainWindow.on(event, () => scheduleWindowStateSave(mainWindow));
+  }
+  mainWindow.on("close", () => saveWindowState(mainWindow));
+
+  attachFailureHandling(mainWindow);
+  attachContextMenu(mainWindow);
 
   // Chat content, citations and notebook links open in the user's browser.
   // Everything pointing back at the local UI stays inside the app.
@@ -298,6 +478,116 @@ function createWindow() {
   });
 
   return mainWindow;
+}
+
+/**
+ * What to show when the page itself dies.
+ *
+ * Without this the window goes white and stays white: a renderer crash, a
+ * navigation to a frontend that stopped listening, or an out-of-memory page
+ * all look identical to a user — a frozen app with no way forward. The
+ * recovery page is a `data:` document for the same reason the splash is: it
+ * has to render when nothing else does.
+ */
+function failurePageHtml(reason) {
+  const name = appName();
+  const reload = JSON.stringify(UI_URL);
+  return `data:text/html;charset=utf-8,` + encodeURIComponent(
+    `<!doctype html><meta charset="utf-8">
+     <body style="margin:0;height:100vh;display:grid;place-items:center;
+                  background:${chromeBackground()};color:#a1a1aa;
+                  font:14px/1.6 system-ui,sans-serif">
+       <div style="text-align:center;max-width:34rem;padding:0 2rem">
+         <div style="font-size:16px;color:${nativeTheme.shouldUseDarkColors ? "#e4e4e7" : "#18181b"};margin-bottom:12px">${t("crash.title")}</div>
+         <div style="margin-bottom:10px">${t("crash.body")}</div>
+         <div style="margin-bottom:18px;font-size:12px;color:#71717a">${reason ? String(reason).slice(0, 200) : ""}</div>
+         <button onclick="location.replace(${reload})"
+                 style="padding:8px 16px;border-radius:6px;border:0;cursor:pointer;
+                        background:#3f3f46;color:#fafafa;font:inherit">
+           ${t("crash.reload")}
+         </button>
+         <div style="margin-top:18px;font-size:12px;color:#52525b">${t("crash.hint")}</div>
+       </div>
+     </body>`,
+  );
+}
+
+/** Recover from a dead renderer, an unresponsive page, or a failed load. */
+function attachFailureHandling(window) {
+  let showingFailure = false;
+
+  const showFailure = (reason) => {
+    if (showingFailure || quitting || window.isDestroyed()) return;
+    showingFailure = true;
+    logLine("shell", `showing recovery page: ${reason}`);
+    window.loadURL(failurePageHtml(reason)).catch(() => {});
+    // The page is a data: URL now; a real navigation means the user (or a
+    // retry) brought the app back.
+    window.webContents.once("did-navigate", () => {
+      showingFailure = false;
+    });
+  };
+
+  window.webContents.on("render-process-gone", (_event, details) => {
+    // `clean-exit` and `killed` are not crashes worth a recovery page: the
+    // first happens during shutdown, the second when something else is
+    // already tearing the process down.
+    if (details?.reason && !["clean-exit", "killed"].includes(details.reason)) {
+      showFailure(`renderer ${details.reason}`);
+    }
+  });
+
+  window.on("unresponsive", () => {
+    logLine("shell", "window reported unresponsive");
+    // Not a navigation: the renderer is alive but stuck. Reloading is the one
+    // action that reliably gets a wedged page back.
+    showFailure("the interface stopped responding");
+  });
+
+  window.webContents.on("did-fail-load", (_event, code, description, url, isMainFrame) => {
+    // -3 is ERR_ABORTED, which every normal navigation past a redirect fires.
+    // Only a failed main frame means the app itself did not arrive.
+    if (!isMainFrame || code === -3) return;
+    // The startup splash is a data: URL and its own polling owns the failure
+    // story; this is about the real UI.
+    if (!url || url.startsWith("data:")) return;
+    showFailure(`${description || "load failed"} (${code})`);
+  });
+}
+
+/**
+ * The editing menu a text field is expected to have.
+ *
+ * Chromium does not draw a context menu by itself in a BrowserWindow — the
+ * application has to. Without this, right-clicking any input in an app built
+ * almost entirely out of text fields does nothing.
+ */
+function attachContextMenu(window) {
+  window.webContents.on("context-menu", (_event, params) => {
+    const template = [];
+    if (params.linkURL) {
+      template.push(
+        { label: t("context.openLink"), click: () => void shell.openExternal(params.linkURL) },
+        { label: t("context.copyLink"), click: () => clipboard.writeText(params.linkURL) },
+        { type: "separator" },
+      );
+    }
+    if (params.isEditable) {
+      template.push(
+        { label: t("context.cut"), role: "cut", enabled: params.editFlags.canCut },
+        { label: t("context.copy"), role: "copy", enabled: params.editFlags.canCopy },
+        { label: t("context.paste"), role: "paste", enabled: params.editFlags.canPaste },
+        { type: "separator" },
+        { label: t("context.selectAll"), role: "selectAll" },
+      );
+    } else if (params.selectionText) {
+      template.push({ label: t("context.copy"), role: "copy" });
+    }
+    if (template.length === 0 && !isDev) return;
+    if (template.length > 0) template.push({ type: "separator" });
+    template.push({ label: t("context.inspect"), click: () => window.webContents.inspectElement(params.x, params.y) });
+    Menu.buildFromTemplate(template).popup({ window });
+  });
 }
 
 /** Same-origin as the local UI, including the app-opened popups it relies on. */
@@ -358,17 +648,14 @@ function startStatusPolling(window) {
       const body = await res.json();
       const helpers = body?.setup?.helpers;
       if (helpers?.state === "syncing") {
-        say(
-          "Preparing Python previews…",
-          "Installing scientific Python packages. This happens once, and can take several minutes.",
-        );
+        say(t("splash.python"), t("splash.pythonHint"));
       } else if (helpers?.state === "failed") {
         say(
-          "Starting local services…",
-          `Python previews are unavailable (${helpers.detail ?? "uv sync failed"}). The app still works.`,
+          t("splash.starting"),
+          t("splash.pythonFailed", { detail: helpers.detail ?? "uv sync failed" }),
         );
       } else {
-        say("Starting local services…", "Loading the interface…");
+        say(t("splash.starting"), t("splash.loadingUi"));
       }
     } catch {
       // Backend not listening yet: the placeholder already says so.
@@ -380,25 +667,33 @@ function startStatusPolling(window) {
   // The frontend usually answers a moment after the backend; without a hint
   // the gap looks like a stall.
   setTimeout(() => {
-    say("Starting the interface…", "The first launch takes longer than later ones.");
+    say(t("splash.slow"), t("splash.slowHint"));
   }, 20_000);
 }
 
-/** The "Starting…" document, kept out of boot() so reopening can reuse it. */
-const SPLASH_HTML =
-  "data:text/html;charset=utf-8," +
-  encodeURIComponent(
-    `<!doctype html><meta charset="utf-8">
-     <body style="margin:0;height:100vh;display:grid;place-items:center;
-                  background:#0b0b0c;color:#a1a1aa;
-                  font:14px/1.6 system-ui,sans-serif">
-       <div style="text-align:center;max-width:32rem;padding:0 2rem">
-         <div style="font-size:16px;color:#e4e4e7;margin-bottom:12px">K-Dense BYOK</div>
-         <div id="line">Starting local services…</div>
-         <div id="hint" style="margin-top:10px;font-size:12px;color:#52525b"></div>
+/**
+ * The "Starting…" document, kept out of boot() so reopening can reuse it.
+ *
+ * Built per launch rather than at module load so it picks up the system theme
+ * and the resolved language.
+ */
+function splashHtml() {
+  const name = appName();
+  const dark = nativeTheme.shouldUseDarkColors;
+  return "data:text/html;charset=utf-8," +
+    encodeURIComponent(
+      `<!doctype html><meta charset="utf-8">
+       <body style="margin:0;height:100vh;display:grid;place-items:center;
+                    background:${chromeBackground()};color:${dark ? "#a1a1aa" : "#52525b"};
+                    font:14px/1.6 system-ui,sans-serif">
+         <div style="text-align:center;max-width:32rem;padding:0 2rem">
+           <div style="font-size:16px;color:${dark ? "#e4e4e7" : "#18181b"};margin-bottom:12px">${name}</div>
+           <div id="line">${t("splash.starting")}</div>
+           <div id="hint" style="margin-top:10px;font-size:12px;color:${dark ? "#52525b" : "#a1a1aa"}"></div>
        </div>
      </body>`,
-  );
+    );
+}
 
 /**
  * Start the two services once per process. Later windows attach to them; this
@@ -412,10 +707,11 @@ async function bootServices() {
   Object.assign(process.env, runtimeEnvironment(artifacts));
   const { blocking, warnings } = checkRuntime(artifacts);
   if (blocking.length) {
+    logLine("shell", `startup blocked: ${blocking.join(" | ")}`);
     await dialog.showMessageBox({
       type: "error",
-      title: "K-Dense BYOK cannot start",
-      message: "A required component is missing.",
+      title: t("error.missing.title", { app: appName() }),
+      message: t("error.missing.message"),
       detail: blocking.join("\n\n"),
     });
     await quitApp({ force: true });
@@ -446,7 +742,7 @@ async function openWindow() {
   if (backendReady) {
     await window.loadURL(UI_URL);
   } else {
-    await window.loadURL(SPLASH_HTML);
+    await window.loadURL(splashHtml());
     startStatusPolling(window);
   }
 
@@ -468,16 +764,16 @@ async function boot() {
   const result = await bootServices();
   if (quitting) return;
   if (!result?.ok) {
+    logLine("shell", `boot failed: ${result?.detail ?? "unknown"}`);
     await dialog.showMessageBox({
       type: "error",
-      title: "K-Dense BYOK could not start",
-      message: "The local services did not become ready.",
+      title: t("error.start.title", { app: appName() }),
+      message: t("error.start.message"),
       detail:
         result?.detail ??
         (isDev
-          ? "Check the terminal output for the failing service. If dependencies are missing, " +
-            "run `npm install` in server/ and web/, then try again."
-          : `Check that no other program is using ${UI_URL} or ${BACKEND_URL}, then restart the app.`),
+          ? t("error.start.devHint")
+          : t("error.start.hint", { ui: UI_URL, backend: BACKEND_URL })),
     });
     app.quit();
     return;
@@ -501,26 +797,58 @@ if (!app.requestSingleInstanceLock()) {
     void dialog
       .showMessageBox({
         type: "error",
-        title: "A Kady service stopped",
-        message: "The app has to close because one of its local services exited.",
-        detail: "Restart K-Dense BYOK to try again. The terminal output has the details.",
+        title: t("error.stopped.title"),
+        message: t("error.stopped.message"),
+        detail: t("error.stopped.detail", { app: appName() }),
       })
       .then(() => app.quit());
   });
 
   app.whenReady().then(async () => {
+    // Everything user-visible in the shell resolves its language here, before
+    // the first dialog can appear.
+    setLanguageFromLocale(app.getLocale());
+    openLog(dataRoot(), {
+      version: app.getVersion(),
+      platform: process.platform,
+      arch: process.arch,
+      locale: app.getLocale(),
+      packaged: String(app.isPackaged),
+    });
+    captureConsole();
+    // Each service line goes to the log and to the terminal, exactly once.
+    setServiceLogSink((source, text, sink) => logServiceLine(source, text, sink));
+
+    // Windows groups notifications and taskbar entries by AppUserModelID; the
+    // installer sets one for the shortcut, and the running process has to
+    // agree or the toast is attributed to the wrong app (or dropped).
+    if (process.platform === "win32") {
+      app.setAppUserModelId("ai.kdense.kady.desktop");
+    }
+    app.setAboutPanelOptions({
+      applicationName: appName(),
+      applicationVersion: app.getVersion(),
+      version: process.versions.electron ? `Electron ${process.versions.electron}` : "",
+      credits: t("about.credits"),
+      copyright: "MIT licensed. Based on K-Dense BYOK by K-Dense Inc.",
+    });
+
     // Install the menu before the first window: roles are what give Chromium
     // its Ctrl+C/V and zoom accelerators.
     buildApplicationMenu();
     // The tray exists from the start so a window close lands in a running
     // shell rather than orphaning the process with no way back.
     if (closeAction() === "tray") createTray();
+    // The page follows the system theme; the window chrome has to follow it
+    // too, or light mode paints dark edges before the renderer catches up.
+    nativeTheme.on("updated", applyThemeToWindow);
     await boot();
     // Started after boot: before that there is no backend to ask, and the
     // first observation would be a false "nothing running".
     startRunWatcher();
   }).catch((error) => {
     console.error("boot failed:", error);
+    logLine("shell", `boot threw: ${error?.stack ?? error}`);
     app.quit();
   });
 
@@ -534,6 +862,11 @@ if (!app.requestSingleInstanceLock()) {
       void quitApp();
       return;
     }
+    // Reaching this branch means the process stays alive, so the tray must
+    // exist — including when the user switched from "quit" to "tray" after
+    // launch, when the startup path above never created one. Without this the
+    // app is running with no window and no way to get it back.
+    createTray();
     ensureTrayHint();
   });
 
@@ -577,36 +910,63 @@ async function quitInterruptsWork() {
  */
 function createTray() {
   if (tray) return tray;
-  // Packaged: extraResources puts the png beside runtime/ in resources/.
-  // Checkout: read it straight from the desktop folder.
-  const candidates = isDev
-    ? [path.join(import.meta.dirname, "resources", "icon.png")]
-    : [path.join(process.resourcesPath, "icon.png"), path.join(process.resourcesPath, "icon.ico")];
-  let image = nativeImage.createEmpty();
-  for (const candidate of candidates) {
-    image = nativeImage.createFromPath(candidate);
-    if (!image.isEmpty()) break;
-  }
+  const image = trayImage();
   if (image.isEmpty()) {
     // An invisible tray icon would leave the app running with no way back;
     // better to say so than to hide the problem.
-    console.warn(`[tray] no icon found in ${candidates.join(", ")}`);
+    console.warn(`[tray] no icon found next to ${process.resourcesPath}`);
   }
 
-  tray = new Tray(image.resize({ width: 16, height: 16 }));
-  tray.setToolTip("K-Dense BYOK");
+  tray = new Tray(image);
+  const name = appName();
+  tray.setToolTip(t("tray.tooltip", { app: name }));
   tray.setContextMenu(
     Menu.buildFromTemplate([
-      { label: "Open K-Dense BYOK", click: () => void reopenWindow() },
+      { label: t("tray.open", { app: name }), click: () => void reopenWindow() },
       { type: "separator" },
       {
-        label: "Quit",
+        label: t("tray.quit"),
         click: () => void quitApp({ force: true }),
       },
     ]),
   );
   tray.on("double-click", () => void reopenWindow());
+  // macOS convention: a left click on a menu-bar item opens its menu, which
+  // the context menu above already is. Windows users expect a click to bring
+  // the window back, and double-click is the habit there.
+  if (process.platform !== "darwin") {
+    tray.on("click", () => void reopenWindow());
+  }
   return tray;
+}
+
+/**
+ * The image for the tray, sized and coloured for the platform.
+ *
+ * macOS menu-bar icons are template images: a monochrome mask that the system
+ * recolours for light/dark and inverts on selection. A colour logo shrunk to
+ * 16px reads as a smudge there, and cannot adapt. Windows and Linux take the
+ * colour icon, which is what their notification areas expect.
+ */
+function trayImage() {
+  const dir = isDev ? path.join(import.meta.dirname, "resources") : process.resourcesPath;
+  const candidates =
+    process.platform === "darwin"
+      ? ["iconTemplate.png", "icon.png"]
+      : ["icon.png", "icon.ico"];
+
+  for (const name of candidates) {
+    const image = nativeImage.createFromPath(path.join(dir, name));
+    if (image.isEmpty()) continue;
+    if (process.platform === "darwin") {
+      if (name === "iconTemplate.png") image.setTemplateImage(true);
+      // The template is authored at 32px for a 16pt slot, so hand it over as
+      // is: resizing a template blurs the mask edge the system uses.
+      return name === "iconTemplate.png" ? image : image.resize({ width: 16, height: 16 });
+    }
+    return image.resize({ width: 16, height: 16 });
+  }
+  return nativeImage.createEmpty();
 }
 
 /** Bring the window back, recreating it if the user closed it. */
@@ -650,13 +1010,31 @@ async function quitApp({ force = false } = {}) {
 function ensureTrayHint() {
   const s = readShellSettings();
   if (s.trayHintShown) return;
-  const t = createTray();
-  if (process.platform === "win32" && t && typeof t.displayBalloon === "function") {
-    t.displayBalloon({
-      title: "K-Dense BYOK is still running",
-      content: "Right-click the tray icon to reopen the window or quit.",
+  const trayInstance = createTray();
+  const name = appName();
+
+  if (process.platform === "win32" && trayInstance && typeof trayInstance.displayBalloon === "function") {
+    trayInstance.displayBalloon({
+      title: t("trayHint.title", { app: name }),
+      content: t("trayHint.body"),
     });
+  } else if (process.platform === "darwin") {
+    // `displayBalloon` is Windows-only, so the macOS case used to fall through
+    // and still mark itself as shown: the user was told nothing, ever. A
+    // notification is the idiomatic equivalent — no tray "balloon" exists on
+    // the menu bar — and it names the two ways back (menu bar icon, Dock).
+    if (Notification.isSupported()) {
+      const hint = new Notification({
+        title: t("trayHint.title", { app: name }),
+        body: t("trayHint.bodyMac", { app: name }),
+        silent: true,
+      });
+      hint.on("click", () => void reopenWindow());
+      hint.show();
+    }
   }
+  // Only record it once something was actually shown; otherwise the hint is
+  // consumed without ever reaching the user.
   writeShellSetting("trayHintShown", true);
 }
 
@@ -671,18 +1049,18 @@ async function confirmQuitWithActiveRuns() {
     .slice(0, 5);
   const detail =
     names.length > 0
-      ? `Still running: ${names.join(", ")}. Closing now ends the response mid-stream.`
-      : "A response is still streaming. Closing now ends it mid-stream.";
+      ? t("quit.running.detailNamed", { names: names.join(", ") })
+      : t("quit.running.detail");
 
   const { response } = await dialog.showMessageBox({
     type: "warning",
-    title: "A response is still running",
+    title: t("quit.running.title"),
     message:
       status.runningSessions === 1
-        ? "One chat is still working."
-        : `${status.runningSessions} chats are still working.`,
+        ? t("quit.running.one")
+        : t("quit.running.many", { count: status.runningSessions }),
     detail,
-    buttons: ["Keep working", "Quit anyway"],
+    buttons: [t("quit.running.keep"), t("quit.running.quit")],
     defaultId: 0,
     cancelId: 0,
     noLink: true,
