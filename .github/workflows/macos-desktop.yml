@@ -57,6 +57,8 @@ jobs:
           # electron-builder otherwise skips even ad-hoc signing on PR builds.
           CSC_FOR_PULL_REQUEST: "true"
         run: npm run dist:mac
+      - name: Verify packaged chat creation
+        run: node desktop/scripts/verify-runtime-session.mjs dist/mac*/Kady.app/Contents/Resources/runtime
       - name: Verify bundle signature
         run: codesign --verify --deep --strict dist/mac*/Kady.app
       - uses: actions/upload-artifact@v4

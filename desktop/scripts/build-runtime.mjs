@@ -72,16 +72,13 @@ function copyDirSkipping(from, to, skip) {
  * dependency never reads.
  *
  *  - `.map` — read only by a debugger attached to third-party code.
- *  - Markdown — documentation. Licences are deliberately kept: dropping those
- *    is a licensing problem, not a size optimisation, and several packages
- *    ship `LICENSE.md` with no extensionless copy.
+ * Markdown is deliberately retained: Pi packages load prompts, agents and
+ * skills from Markdown at runtime; these are not merely documentation.
  *  - Test files — `__tests__/` directories and `*.test.*` / `*.spec.*`. A
  *    package's top-level `test/` is *not* dropped even though it usually holds
  *    only tests: a few older packages keep fixtures there that runtime code
  *    reads, and the whole point of this filter is to be safe.
  */
-const OMITTED_DOC = /\.(md|markdown)$/i;
-const KEPT_DOC = /^(licen[cs]e|copying|notice|third[-_]?part(y|ies)|authors|contributors)/i;
 const OMITTED_TEST_FILE = /\.(test|spec)\.[cm]?[jt]sx?$/i;
 
 function omitFromBundle(src) {
@@ -89,7 +86,6 @@ function omitFromBundle(src) {
   const stat = fs.statSync(src, { throwIfNoEntry: false });
   if (stat?.isDirectory()) return base === "__tests__";
   if (base.endsWith(".map")) return true;
-  if (OMITTED_DOC.test(base)) return !KEPT_DOC.test(base);
   return OMITTED_TEST_FILE.test(base);
 }
 
