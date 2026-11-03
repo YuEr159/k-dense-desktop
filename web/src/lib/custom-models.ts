@@ -8,6 +8,22 @@ import { apiFetch } from "@/lib/projects";
 export const CUSTOM_MODEL_APIS = ["openai-completions", "openai-responses", "anthropic-messages"] as const;
 export type CustomModelApi = (typeof CUSTOM_MODEL_APIS)[number];
 
+/** Keys Pi's `thinkingLevelMap` accepts, `off` included (it gates disabling thinking). */
+export const CUSTOM_THINKING_LEVEL_KEYS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+export type CustomThinkingLevelKey = (typeof CUSTOM_THINKING_LEVEL_KEYS)[number];
+
+/** Level → provider effort string; `null` marks a level unsupported. */
+export type CustomThinkingLevelMap = Partial<Record<CustomThinkingLevelKey, string | null>>;
+
+export interface CustomModelCompat {
+  /**
+   * Send adaptive thinking (`output_config.effort`) instead of a token budget.
+   * The budget path clamps xhigh and max down to high, so a map naming either
+   * level only takes effect on this path.
+   */
+  forceAdaptiveThinking?: boolean;
+}
+
 export interface CustomModelDefinition {
   id: string;
   name?: string;
@@ -17,6 +33,8 @@ export interface CustomModelDefinition {
   maxTokens?: number;
   /** USD per million tokens. */
   cost?: { input: number; output: number; cacheRead: number; cacheWrite: number };
+  thinkingLevelMap?: CustomThinkingLevelMap;
+  compat?: CustomModelCompat;
 }
 
 export interface CustomProvider {

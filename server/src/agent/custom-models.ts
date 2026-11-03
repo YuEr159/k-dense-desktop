@@ -19,7 +19,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { KADY_PI_AGENT_DIR } from "../config.ts";
-import type { Api, Model } from "@earendil-works/pi-ai";
+import type { Api, Model, ThinkingLevelMap } from "@earendil-works/pi-ai";
 import { isDirectProvider } from "./provider-catalog.ts";
 import { isSubscriptionProvider, tierFor, type ClientDirectModel } from "./provider-auth.ts";
 
@@ -30,6 +30,36 @@ const RESERVED_PROVIDER_IDS = new Set(["openrouter", "ollama", "openai-compatibl
 const MAX_PROVIDERS = 20;
 const MAX_MODELS_PER_PROVIDER = 100;
 
+/**
+ * Every key Pi's `ThinkingLevelMap` may carry, in Pi's own order.
+ *
+ * `off` is a map key but not a `ThinkingLevel`: Pi reads `map.off !== null` to
+ * decide whether thinking may be turned off at all, so a model that cannot
+ * disable thinking says so here.
+ */
+const THINKING_LEVEL_KEYS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+
+/**
+ * Pi's per-model `compat.forceAdaptiveThinking`, narrowed to the one field
+ * custom servers need.
+ *
+ * Pi's Anthropic adapter has two thinking paths: a token budget derived from
+ * the level (`thinking.budget_tokens`), or adaptive thinking with
+ * `output_config.effort`. The budget path runs every level through
+ * `clampReasoning()`, which folds `xhigh` and `max` down to `high` — so a
+ * custom gateway that does understand a top effort can never receive one.
+ * Setting this sends the effort path instead, where `thinkingLevelMap` is
+ * consulted verbatim.
+ *
+ * Deliberately not the whole `AnthropicMessagesCompat` surface: the other
+ * fields describe wire quirks (cache control, strict tools) that Kady cannot
+ * verify for an arbitrary gateway, and a wrong one fails the request rather
+ * than degrading.
+ */
+export interface CustomModelCompat {
+  forceAdaptiveThinking?: boolean;
+}
+
 export interface CustomModelDefinition {
   id: string;
   name?: string;
@@ -37,9 +67,26 @@ export interface CustomModelDefinition {
   input?: Array<"text" | "image">;
   contextWindow?: number;
   maxTokens?: number;
-  /** USD per million tokens, Pi's convention. */
+  /**
+   * USD per million tokens, Pi's convention.
+   */
   cost?: { input: number; output: number; cacheRead: number; cacheWrite: number };
+  /**
+   * Level → provider-specific effort string, passed straight to Pi.
+   *
+   * Two things depend on this. `getSupportedThinkingLevels()` reports
+   * `xhigh`/`max` as unavailable unless the model maps them to something, so
+   * without an entry Pi clamps the requested level before the request is
+   * built; and on the effort path `mapThinkingLevelToEffort()` consults this
+   * map before its built-in switch. `null` marks a level unsupported.
+   */
+  thinkingLevelMap?: ThinkingLevelMap;
+  /** Wire-format overrides; see `CustomModelCompat`. */
+  compat?: CustomModelCompat;
 }
+
+/** Levels a map may name, for callers that render or validate one. */
+export const CUSTOM_THINKING_LEVEL_KEYS = THINKING_LEVEL_KEYS;
 
 export interface CustomProvider {
   id: string;
@@ -119,6 +166,74 @@ function manifestPath(agentDir = KADY_PI_AGENT_DIR): string {
 type Rec = Record<string, unknown>;
 const asRecord = (v: unknown): Rec => (v && typeof v === "object" && !Array.isArray(v) ? (v as Rec) : {});
 
+/**
+ * Read a `thinkingLevelMap` off disk or off the wire.
+ *
+ * Lenient on purpose: this runs on values the user typed into models.json by
+ * hand, and dropping the whole map over one stray key would take the working
+ * levels with it. Unknown keys are ignored, a non-string non-null value for a
+ * known key is ignored, and a map that ends up empty disappears entirely so
+ * the model reads exactly like a model that never had one.
+ */
+function parseThinkingLevelMap(value: unknown): ThinkingLevelMap | undefined {
+  const raw = asRecord(value);
+  const out: ThinkingLevelMap = {};
+  for (const level of THINKING_LEVEL_KEYS) {
+    const entry = raw[level];
+    if (typeof entry === "string") out[level] = entry;
+    else if (entry === null) out[level] = null;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/**
+ * Read `compat` off disk or off the wire.
+ *
+ * Only the one field Kady models is carried; see `CustomModelCompat` for why
+ * the rest of Pi's compat surface stays out of reach here.
+ */
+function parseCompat(value: unknown): CustomModelCompat | undefined {
+  const raw = asRecord(value);
+  return typeof raw.forceAdaptiveThinking === "boolean"
+    ? { forceAdaptiveThinking: raw.forceAdaptiveThinking }
+    : undefined;
+}
+
+/** Validate one model's `thinkingLevelMap` from a submitted payload. */
+function validateThinkingLevelMap(
+  value: unknown,
+  where: string,
+): ThinkingLevelMap | undefined | string {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "object" || Array.isArray(value)) return `${where}: thinkingLevelMap must be an object`;
+  const raw = value as Rec;
+  const out: ThinkingLevelMap = {};
+  for (const [key, entry] of Object.entries(raw)) {
+    if (!(THINKING_LEVEL_KEYS as readonly string[]).includes(key)) {
+      return `${where}: unknown thinking level "${key}" (expected ${THINKING_LEVEL_KEYS.join(", ")})`;
+    }
+    if (entry !== null && typeof entry !== "string") {
+      return `${where}: thinkingLevelMap.${key} must be a string or null`;
+    }
+    if (typeof entry === "string" && entry.length > 64) return `${where}: thinkingLevelMap.${key} is too long`;
+    out[key as (typeof THINKING_LEVEL_KEYS)[number]] = entry;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/** Validate one model's `compat` from a submitted payload. */
+function validateCompat(value: unknown, where: string): CustomModelCompat | undefined | string {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "object" || Array.isArray(value)) return `${where}: compat must be an object`;
+  const raw = value as Rec;
+  const unknown = Object.keys(raw).filter((key) => key !== "forceAdaptiveThinking");
+  if (unknown.length > 0) return `${where}: unsupported compat field(s) ${unknown.join(", ")}`;
+  if (raw.forceAdaptiveThinking !== undefined && typeof raw.forceAdaptiveThinking !== "boolean") {
+    return `${where}: compat.forceAdaptiveThinking must be a boolean`;
+  }
+  return typeof raw.forceAdaptiveThinking === "boolean" ? { forceAdaptiveThinking: raw.forceAdaptiveThinking } : undefined;
+}
+
 function readJson(file: string): Rec | null {
   try {
     return asRecord(JSON.parse(fs.readFileSync(file, "utf-8")));
@@ -143,24 +258,30 @@ function providerFromJson(id: string, raw: Rec): CustomProvider {
     models: models
       .map((m) => asRecord(m))
       .filter((m) => typeof m.id === "string")
-      .map((m) => ({
-        id: m.id as string,
-        ...(typeof m.name === "string" ? { name: m.name } : {}),
-        ...(typeof m.reasoning === "boolean" ? { reasoning: m.reasoning } : {}),
-        ...(Array.isArray(m.input) ? { input: m.input.filter((x): x is "text" | "image" => x === "text" || x === "image") } : {}),
-        ...(typeof m.contextWindow === "number" ? { contextWindow: m.contextWindow } : {}),
-        ...(typeof m.maxTokens === "number" ? { maxTokens: m.maxTokens } : {}),
-        ...(m.cost && typeof m.cost === "object"
-          ? {
-              cost: {
-                input: Number(asRecord(m.cost).input ?? 0),
-                output: Number(asRecord(m.cost).output ?? 0),
-                cacheRead: Number(asRecord(m.cost).cacheRead ?? 0),
-                cacheWrite: Number(asRecord(m.cost).cacheWrite ?? 0),
-              },
-            }
-          : {}),
-      })),
+      .map((m) => {
+        const thinkingLevelMap = parseThinkingLevelMap(m.thinkingLevelMap);
+        const compat = parseCompat(m.compat);
+        return {
+          id: m.id as string,
+          ...(typeof m.name === "string" ? { name: m.name } : {}),
+          ...(typeof m.reasoning === "boolean" ? { reasoning: m.reasoning } : {}),
+          ...(Array.isArray(m.input) ? { input: m.input.filter((x): x is "text" | "image" => x === "text" || x === "image") } : {}),
+          ...(typeof m.contextWindow === "number" ? { contextWindow: m.contextWindow } : {}),
+          ...(typeof m.maxTokens === "number" ? { maxTokens: m.maxTokens } : {}),
+          ...(m.cost && typeof m.cost === "object"
+            ? {
+                cost: {
+                  input: Number(asRecord(m.cost).input ?? 0),
+                  output: Number(asRecord(m.cost).output ?? 0),
+                  cacheRead: Number(asRecord(m.cost).cacheRead ?? 0),
+                  cacheWrite: Number(asRecord(m.cost).cacheWrite ?? 0),
+                },
+              }
+            : {}),
+          ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
+          ...(compat ? { compat } : {}),
+        };
+      }),
   };
 }
 
@@ -262,6 +383,20 @@ export function validateCustomProviders(input: unknown): CustomProviderInput[] |
         cost = parts as CustomModelDefinition["cost"];
       }
       const input = Array.isArray(m.input) ? m.input.filter((x): x is "text" | "image" => x === "text" || x === "image") : undefined;
+      const where = `model "${modelId}"`;
+      const thinkingLevelMap = validateThinkingLevelMap(m.thinkingLevelMap, where);
+      if (typeof thinkingLevelMap === "string") return thinkingLevelMap;
+      const compat = validateCompat(m.compat, where);
+      if (typeof compat === "string") return compat;
+      // The effort path is the only one that honours `thinkingLevelMap`
+      // verbatim: the budget path runs every level through
+      // `clampReasoning()`, which folds xhigh/max down to high. A map alone
+      // therefore looks correct and changes nothing, so refuse the pairing
+      // rather than accept a setting that silently does not work.
+      if (thinkingLevelMap && (thinkingLevelMap.xhigh !== undefined || thinkingLevelMap.max !== undefined) &&
+          compat?.forceAdaptiveThinking !== true && api === "anthropic-messages") {
+        return `${where}: a thinkingLevelMap for xhigh/max needs compat.forceAdaptiveThinking, or Pi clamps both levels to high`;
+      }
       models.push({
         id: modelId,
         ...(typeof m.name === "string" && m.name.trim() ? { name: m.name.trim() } : {}),
@@ -270,6 +405,8 @@ export function validateCustomProviders(input: unknown): CustomProviderInput[] |
         ...(contextWindow !== undefined ? { contextWindow } : {}),
         ...(maxTokens !== undefined ? { maxTokens } : {}),
         ...(cost ? { cost } : {}),
+        ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
+        ...(compat ? { compat } : {}),
       });
     }
     out.push({
@@ -321,6 +458,8 @@ export function writeCustomProviders(providers: CustomProviderInput[], agentDir 
         ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
         ...(m.maxTokens !== undefined ? { maxTokens: m.maxTokens } : {}),
         ...(m.cost ? { cost: m.cost } : {}),
+        ...(m.thinkingLevelMap ? { thinkingLevelMap: m.thinkingLevelMap } : {}),
+        ...(m.compat ? { compat: m.compat } : {}),
       })),
     };
   }

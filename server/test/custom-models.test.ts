@@ -196,3 +196,107 @@ describe("custom provider keys", () => {
     expect(publicCustomProviders(dir)[0].apiKey).toBe("$LAB_KEY");
   });
 });
+
+describe("thinking metadata on custom models", () => {
+  const gateway = {
+    id: "dfgateway",
+    baseUrl: "http://gw:3000",
+    api: "anthropic-messages",
+    models: [
+      {
+        id: "DeepSeek-Flash",
+        reasoning: true,
+        compat: { forceAdaptiveThinking: true },
+        thinkingLevelMap: { xhigh: "max", max: "max" },
+      },
+    ],
+  };
+
+  it("round-trips thinkingLevelMap and compat through models.json", () => {
+    // The whole point: a value the user typed is still there after a save.
+    // Both directions used to rebuild the model object field by field, so an
+    // unlisted key vanished on load and again on write.
+    const ok = validateCustomProviders([gateway]);
+    if (typeof ok === "string") throw new Error(ok);
+    writeCustomProviders(ok, dir);
+
+    const stored = JSON.parse(fs.readFileSync(modelsJsonPath(dir), "utf-8"));
+    expect(stored.providers.dfgateway.models[0]).toMatchObject({
+      thinkingLevelMap: { xhigh: "max", max: "max" },
+      compat: { forceAdaptiveThinking: true },
+    });
+
+    const listed = listCustomProviders(dir)[0].models[0];
+    expect(listed.thinkingLevelMap).toEqual({ xhigh: "max", max: "max" });
+    expect(listed.compat).toEqual({ forceAdaptiveThinking: true });
+
+    // Re-saving what was read back must not drop it either.
+    const again = validateCustomProviders(listCustomProviders(dir));
+    if (typeof again === "string") throw new Error(again);
+    writeCustomProviders(again, dir);
+    expect(listCustomProviders(dir)[0].models[0].thinkingLevelMap).toEqual({ xhigh: "max", max: "max" });
+  });
+
+  it("keeps a hand-written map readable even when Pi's own field shapes vary", () => {
+    // models.json is a file the user may edit by hand, so loading is lenient:
+    // an unknown level or a stray value is ignored rather than taking the
+    // whole map down with it.
+    fs.writeFileSync(
+      modelsJsonPath(dir),
+      JSON.stringify({
+        providers: {
+          hand: {
+            baseUrl: "http://gw:3000",
+            api: "anthropic-messages",
+            apiKey: "none",
+            models: [
+              { id: "m", reasoning: true, thinkingLevelMap: { high: "high", xhigh: "max", bogus: "x", max: 5 } },
+              { id: "n", thinkingLevelMap: {} },
+            ],
+          },
+        },
+      }),
+    );
+    const models = listCustomProviders(dir)[0].models;
+    expect(models[0].thinkingLevelMap).toEqual({ high: "high", xhigh: "max" });
+    // An empty map is no map: the model reads like one that never had any.
+    expect(models[1].thinkingLevelMap).toBeUndefined();
+  });
+
+  it("rejects a shape the server cannot honour", () => {
+    const bad = (patch: object) =>
+      validateCustomProviders([{ ...gateway, models: [{ ...gateway.models[0], ...patch }] }]);
+
+    expect(bad({ thinkingLevelMap: ["xhigh"] })).toMatch(/must be an object/);
+    expect(bad({ thinkingLevelMap: { turbo: "max" } })).toMatch(/unknown thinking level "turbo"/);
+    expect(bad({ thinkingLevelMap: { xhigh: 5 } })).toMatch(/must be a string or null/);
+    expect(bad({ compat: { other: true } })).toMatch(/unsupported compat field/);
+    expect(bad({ compat: { forceAdaptiveThinking: "yes" } })).toMatch(/must be a boolean/);
+  });
+
+  it("refuses an xhigh/max map that the budget path would clamp away", () => {
+    // Pi's budget path runs every level through `clampReasoning()`, which folds
+    // xhigh and max into high. A map naming either level without adaptive
+    // thinking looks correct and changes nothing at the wire, so it is better
+    // to fail the save than to accept a setting that silently does not work.
+    const clamped = validateCustomProviders([
+      { ...gateway, models: [{ id: "m", reasoning: true, thinkingLevelMap: { xhigh: "max" } }] },
+    ]);
+    expect(clamped).toMatch(/needs compat\.forceAdaptiveThinking/);
+
+    // A map that never names those levels is fine on either path.
+    const harmless = validateCustomProviders([
+      { ...gateway, models: [{ id: "m", reasoning: true, thinkingLevelMap: { low: "low" } }] },
+    ]);
+    expect(typeof harmless).not.toBe("string");
+  });
+
+  it("null marks a level unsupported", () => {
+    const ok = validateCustomProviders([
+      { ...gateway, models: [{ id: "m", reasoning: true, thinkingLevelMap: { off: null } }] },
+    ]);
+    if (typeof ok === "string") throw new Error(ok);
+    writeCustomProviders(ok, dir);
+    expect(listCustomProviders(dir)[0].models[0].thinkingLevelMap).toEqual({ off: null });
+  });
+});

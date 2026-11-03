@@ -17,15 +17,20 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import {
   CUSTOM_MODEL_APIS,
+  CUSTOM_THINKING_LEVEL_KEYS,
   getCustomProviders,
   saveCustomProviders,
   type CustomModelApi,
   type CustomModelDefinition,
   type CustomProvider,
   type CustomProviderListing,
+  type CustomThinkingLevelMap,
 } from "@/lib/custom-models";
 import { notifyProviderAuthChanged } from "@/lib/use-provider-auth";
 import { SettingsError } from "@/components/settings/primitives";
+
+/** The two levels Pi's budget path folds into `high`; see the map's doc comment. */
+const HIGH_EFFORT_LEVELS = ["xhigh", "max"] as const;
 
 interface ModelRow {
   id: string;
@@ -36,6 +41,16 @@ interface ModelRow {
   image: boolean;
   costInput: string;
   costOutput: string;
+  /**
+   * Level → effort pairs as free text, one `level=effort` per line.
+   *
+   * A table of seven labelled inputs would dominate the card for a setting
+   * almost no server needs; text keeps the row compact and lets an unusual
+   * gateway name any effort string it wants.
+   */
+  thinkingMap: string;
+  /** Send adaptive thinking instead of a token budget. */
+  adaptiveThinking: boolean;
 }
 
 interface ProviderDraft {
@@ -58,7 +73,44 @@ const emptyModel = (): ModelRow => ({
   image: false,
   costInput: "",
   costOutput: "",
+  thinkingMap: "",
+  adaptiveThinking: false,
 });
+
+/** Render a saved map back into the row's `level=effort` lines. */
+export function thinkingMapToText(map: CustomThinkingLevelMap | undefined): string {
+  if (!map) return "";
+  return CUSTOM_THINKING_LEVEL_KEYS.filter((level) => map[level] !== undefined)
+    .map((level) => `${level}=${map[level] === null ? "null" : map[level]}`)
+    .join("\n");
+}
+
+/**
+ * Parse the row's `level=effort` lines, or return the first problem.
+ *
+ * `level=null` marks that level unsupported, which is how Pi expresses "this
+ * model cannot be asked for less thinking than X".
+ */
+export function textToThinkingMap(
+  text: string,
+  where: string,
+): CustomThinkingLevelMap | undefined | string {
+  const out: CustomThinkingLevelMap = {};
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const eq = trimmed.indexOf("=");
+    if (eq <= 0) return `${where}: "${trimmed}" is not a level=effort pair`;
+    const level = trimmed.slice(0, eq).trim();
+    const effort = trimmed.slice(eq + 1).trim();
+    if (!(CUSTOM_THINKING_LEVEL_KEYS as readonly string[]).includes(level)) {
+      return `${where}: unknown thinking level "${level}"`;
+    }
+    if (!effort) return `${where}: "${level}" has no effort value`;
+    out[level as (typeof CUSTOM_THINKING_LEVEL_KEYS)[number]] = effort === "null" ? null : effort;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
 
 const emptyProvider = (): ProviderDraft => ({
   id: "",
@@ -86,6 +138,8 @@ function draftFrom(p: CustomProviderListing): ProviderDraft {
       image: m.input?.includes("image") ?? false,
       costInput: String(m.cost?.input ?? 0),
       costOutput: String(m.cost?.output ?? 0),
+      thinkingMap: thinkingMapToText(m.thinkingLevelMap),
+      adaptiveThinking: m.compat?.forceAdaptiveThinking === true,
     })),
   };
 }
@@ -118,6 +172,20 @@ export function providersFromDrafts(drafts: ProviderDraft[]): CustomProvider[] |
         ...(mt !== undefined ? { maxTokens: mt } : {}),
         cost: { input: ci, output: co, cacheRead: 0, cacheWrite: 0 },
       };
+      const thinkingLevelMap = textToThinkingMap(m.thinkingMap, `Model "${modelId}"`);
+      if (typeof thinkingLevelMap === "string") return thinkingLevelMap;
+      if (thinkingLevelMap) def.thinkingLevelMap = thinkingLevelMap;
+      if (m.adaptiveThinking) def.compat = { forceAdaptiveThinking: true };
+      // A map naming an effort for a level the budget path clamps changes
+      // nothing at the wire, so the backend refuses the pairing too — say so
+      // here where the user can still see which switch to flip.
+      if (
+        !m.adaptiveThinking &&
+        d.api === "anthropic-messages" &&
+        HIGH_EFFORT_LEVELS.some((level) => thinkingLevelMap?.[level] !== undefined)
+      ) {
+        return `Model "${modelId}": an xhigh/max mapping needs "Adaptive thinking" turned on, or Pi clamps both to high`;
+      }
       models.push(def);
     }
     if (models.length === 0) return `Server "${id}" needs at least one model id`;
@@ -366,6 +434,37 @@ export function CustomModelsCard() {
                       Remove model
                     </Button>
                   </div>
+                  <details className="mt-2">
+                    <summary className="cursor-pointer text-[11px] text-muted-foreground">Thinking levels</summary>
+                    <div className="mt-2 space-y-2 rounded-md border border-dashed p-2">
+                      <label className="block text-[11px] text-muted-foreground">
+                        Level mapping
+                        <textarea
+                          value={m.thinkingMap}
+                          rows={3}
+                          spellCheck={false}
+                          placeholder={"xhigh=max\nmax=max"}
+                          aria-label={`Server ${pi + 1} model ${mi + 1} thinking level map`}
+                          className="mt-1 w-full rounded-md border bg-transparent px-2 py-1 font-mono text-[11px]"
+                          onChange={(e) => editModel(pi, mi, { thinkingMap: e.target.value })}
+                        />
+                      </label>
+                      <p className="text-[10px] text-muted-foreground">
+                        One <code className="font-mono">level=effort</code> per line, sent to the provider as-is. A model also
+                        has to name <code className="font-mono">xhigh</code> or <code className="font-mono">max</code> here
+                        before Pi will offer those levels at all.
+                      </p>
+                      <label className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                        <Switch checked={m.adaptiveThinking} aria-label={`Server ${pi + 1} model ${mi + 1} adaptive thinking`} onCheckedChange={(v) => editModel(pi, mi, { adaptiveThinking: v })} />
+                        Adaptive thinking (effort instead of token budget)
+                      </label>
+                      <p className="text-[10px] text-muted-foreground">
+                        Pi&apos;s budget path folds <code className="font-mono">xhigh</code> and{" "}
+                        <code className="font-mono">max</code> into <code className="font-mono">high</code>; this switch is
+                        what makes either level reach the server.
+                      </p>
+                    </div>
+                  </details>
                 </li>
               ))}
             </ul>
