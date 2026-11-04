@@ -829,6 +829,7 @@ async function bootServices() {
   // tool call fails with an error the user cannot act on.
   Object.assign(process.env, runtimeEnvironment(artifacts));
   const { blocking, warnings } = checkRuntime(artifacts);
+  mark("preflight done");
   if (blocking.length) {
     logLine("shell", `startup blocked: ${blocking.join(" | ")}`);
     await dialog.showMessageBox({
@@ -845,9 +846,8 @@ async function bootServices() {
   }
 
   servicesStarted = true;
-  const result = await startServices({ dataRoot: dataRoot(), ...artifacts });
-  return result;
-}
+  const result = await startServices({ dataRoot: dataRoot(), ...artifacts, mark });
+  return result;}
 
 /** Open the window. When the services are still coming up this shows the
  *  progress splash; a window opened later goes straight to the app because the
@@ -864,12 +864,15 @@ async function openWindow() {
   // the probe is cheap when the frontend is up.
   if (servicesStarted) await refreshShellLanguage();
   const window = createWindow();
+  mark("window created");
 
   const backendReady = servicesStarted && (await backendAnswers());
   if (backendReady) {
     await window.loadURL(UI_URL);
+    mark("ui loaded");
   } else {
     await window.loadURL(splashHtml());
+    mark("splash loaded");
     startStatusPolling(window);
     // The splash is a `data:` document with no script of its own, so nothing
     // in it can ever navigate away. Without this the window stayed on
@@ -925,6 +928,19 @@ async function backendAnswers() {
   }
 }
 
+/**
+ * Startup stage timer.
+ *
+ * A slow launch is otherwise unarguable: the log shows the backend listening
+ * at some point and the window at another, with no way to tell which stage
+ * took the time. Each line reads `boot +1234ms <stage>`, so `grep "boot +"`
+ * over shell.log answers "where did those seconds go".
+ */
+const bootStartedAt = Date.now();
+function mark(stage) {
+  logLine("shell", `boot +${Date.now() - bootStartedAt}ms ${stage}`);
+}
+
 async function boot() {
   // Put the window on screen before the services start. A cold start takes
   // tens of seconds, and a launch that shows nothing for that long reads as
@@ -932,9 +948,12 @@ async function boot() {
   // icon to get a window at all. `openWindow` picks the splash by itself while
   // `servicesStarted` is false, and its own readiness poll swaps in the app, so
   // it is deliberately not awaited here.
-  void openWindow().catch((error) => {
-    logLine("shell", `window failed to open: ${error?.stack ?? error}`);
-  });
+  mark("boot start");
+  void openWindow()
+    .then(() => mark("app window loaded"))
+    .catch((error) => {
+      logLine("shell", `window failed to open: ${error?.stack ?? error}`);
+    });
 
   const result = await bootServices();
   if (quitting) return;

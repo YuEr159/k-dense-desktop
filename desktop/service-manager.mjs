@@ -393,6 +393,7 @@ async function waitFor(url, label, timeoutMs, { expectToken = false } = {}) {
  * @param {string} [options.backendBundle]  compiled backend entry (packaged)
  * @param {string} [options.standaloneDir]  Next standalone dir (packaged)
  * @param {string} [options.modelsCatalogue]  models.json path (packaged)
+ * @param {(stage: string) => void} [options.mark]  startup stage timer
  */
 export async function startServices({
   dataRoot,
@@ -400,6 +401,7 @@ export async function startServices({
   backendBundle,
   standaloneDir,
   modelsCatalogue,
+  mark = () => {},
 }) {
   fs.mkdirSync(dataRoot, { recursive: true });
   const env = commonEnv(dataRoot, modelsCatalogue, externalsDir);
@@ -413,6 +415,7 @@ export async function startServices({
   const busy = [];
   if (await portInUse(BACKEND_PORT)) busy.push(BACKEND_PORT);
   if (await portInUse(FRONTEND_PORT)) busy.push(FRONTEND_PORT);
+  mark("port check done");
   if (busy.length) {
     const ports = busy.join(" and ");
     const detail =
@@ -432,13 +435,16 @@ export async function startServices({
     startBackendFromSource(env);
     startFrontendFromSource(env);
   }
+  mark("services spawned");
 
   const backendUp = await waitFor(`${BACKEND_URL}/health`, "backend", 120_000, {
     expectToken: true,
   });
+  mark(`backend ${backendUp ? "ready" : "timed out"}`);
   const frontendUp = backendUp
     ? await waitFor(`${UI_URL}/`, "frontend", 180_000)
     : false;
+  mark(`frontend ${frontendUp ? "ready" : "timed out"}`);
 
   if (backendUp && frontendUp) {
     servicesReady = true;
