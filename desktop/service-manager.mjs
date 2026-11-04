@@ -65,6 +65,9 @@ let portConflict = null;
 /** Flips once startServices() has both services answering. */
 let servicesReady = false;
 
+/** Startup stage timer, set by `startServices` for the spawned-child marks. */
+let startupMark = null;
+
 function consumeStartupProblem() {
   const problem = childFailure
     ? { kind: "child", ...childFailure }
@@ -102,12 +105,25 @@ function spawnService(label, file, args, cwd, env) {
   children.add(child);
   if (process.platform !== "win32" && child.pid) processGroups.add(child.pid);
 
+  // When the child produced its first byte of output. A launch that spends 40s
+  // before the backend listens has two possible shapes — the runtime took that
+  // long to start the process, or the process started at once and then spent
+  // 40s initialising — and the log cannot tell them apart without this.
+  const spawnedAt = Date.now();
+  let firstByteAt = null;
+  const noteFirstByte = () => {
+    if (firstByteAt !== null) return;
+    firstByteAt = Date.now() - spawnedAt;
+    startupMark?.(`${label} first byte (${firstByteAt}ms after spawn)`);
+  };
+
   // One line goes to the terminal (a source checkout still has one) and to the
   // log file (a packaged app has no terminal at all). A packaged launch that
   // never starts is diagnosable only from the second.
   const forward = (stream, sink) => {
     stream.setEncoding("utf8");
     stream.on("data", (chunk) => {
+      noteFirstByte();
       const text = chunk.trimEnd();
       if (!text) return;
       if (lineSink) {
@@ -403,6 +419,7 @@ export async function startServices({
   modelsCatalogue,
   mark = () => {},
 }) {
+  startupMark = mark;
   fs.mkdirSync(dataRoot, { recursive: true });
   const env = commonEnv(dataRoot, modelsCatalogue, externalsDir);
   // The backend echoes this from /health so the readiness probe can tell our
