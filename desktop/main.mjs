@@ -1012,7 +1012,14 @@ if (!app.requestSingleInstanceLock()) {
       locale: app.getLocale(),
       packaged: String(app.isPackaged),
     });
-    setLanguageFromLocale(await resolveShellLanguage());
+    // Before the first launch there is no page to ask: the frontend has not
+    // started yet, so `readPageLocale` would open a hidden BrowserWindow, wait
+    // out its four-second timeout, and — on Windows — leave a fully initialised
+    // Chromium renderer behind just as the services are spawned. The system
+    // locale is the same fallback the page itself uses on a fresh install, and
+    // `refreshShellLanguage` re-reads the stored choice once the app is up.
+    const storedLanguage = servicesStarted ? await resolveShellLanguage() : null;
+    setLanguageFromLocale(storedLanguage ?? fallbackLocale(app.getLocale()));
     captureConsole();
     // Each service line goes to the log and to the terminal, exactly once.
     setServiceLogSink((source, text, sink) => logServiceLine(source, text, sink));
