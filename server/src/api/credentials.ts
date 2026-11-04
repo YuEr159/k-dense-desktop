@@ -174,6 +174,18 @@ const BASE_MANAGED_KEYS: ManagedKey[] = [
     validate: httpUrl("OPENAI_COMPATIBLE_BASE_URL"),
     onChange: localProvidersHook,
   },
+  // Not a model server: where `uv sync` downloads the Python packages behind
+  // file previews. The default PyPI CDN measured 17m22s for the ~553 MB a
+  // first launch installs; a regional mirror did the same install in 26s.
+  // Only the host changes — versions and sha256 digests stay pinned by the
+  // shipped lockfile (helpers-env.ts).
+  {
+    id: "pypiIndex",
+    bodyField: "pypiIndex",
+    envVar: "KADY_PYPI_INDEX",
+    secret: false,
+    validate: httpUrl("KADY_PYPI_INDEX"),
+  },
 ];
 
 /**

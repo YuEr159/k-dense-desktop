@@ -28,7 +28,7 @@ import {
   disposeProjectSessions,
   listSessions,
 } from "../agent/session-registry.ts";
-import { agentsMdStatus, restoreAgentsMd, syncSandboxVenv } from "../sandbox-seed.ts";
+import { agentsMdStatus, restoreAgentsMd, syncSandboxVenvAsync } from "../sandbox-seed.ts";
 import { listProjectActivities } from "../project-activity.ts";
 import { modalJobManager } from "../modal/manager.ts";
 import {
@@ -285,8 +285,13 @@ export async function registerProjectRoutes(app: FastifyInstance): Promise<void>
       const paths = resolvePaths(req.params.projectId);
       const allowRemote = body.download_skills !== false;
       const count = await seedProjectSkills(paths, allowRemote);
-      const venvSynced = body.sync_venv ? syncSandboxVenv(paths) : false;
-      return { ok: true, skills: count, venvSynced };
+      // Not awaited: a cold sandbox venv downloads numpy/pandas/scipy/
+      // matplotlib and would hold this response — and every other open tab's
+      // stream — for as long as that takes. `uv run` syncs on demand anyway.
+      if (body.sync_venv) {
+        void syncSandboxVenvAsync(paths).catch(() => {});
+      }
+      return { ok: true, skills: count, venvSyncing: Boolean(body.sync_venv) };
     },
   );
 

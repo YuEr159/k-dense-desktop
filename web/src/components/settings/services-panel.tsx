@@ -69,6 +69,43 @@ const PAPERCLIP_KEY_DEF: KeyDef = {
 };
 
 /**
+ * Where `uv sync` downloads the Python packages behind file previews.
+ *
+ * A host swap, not a looser policy: the shipped lockfile still pins every
+ * version and sha256, so a mirror can only serve the same bytes or fail. It
+ * ships unset because the default PyPI CDN is the right choice where it is
+ * fast — the mirror matters where it is not.
+ */
+function PypiMirrorCard({
+  status,
+  onStatus,
+}: {
+  status: CredentialStatus | null;
+  onStatus: (status: CredentialStatus) => void;
+}) {
+  return (
+    <SettingsCard
+      id="python-packages"
+      title="Python package mirror"
+      description="Only needed where downloading from PyPI is slow. The first launch installs about 550 MB of scientific packages; on a slow link that can take much longer than starting the app again ever will."
+    >
+      <KeyRow
+        def={{
+          id: "pypiIndex",
+          bodyField: "pypiIndex",
+          label: "Package index URL",
+          placeholder: "https://pypi.tuna.tsinghua.edu.cn/simple",
+          hint: "Leave unset to download from PyPI itself. Versions and checksums stay pinned by Kady's lockfile — this only changes where the files come from. Applies to the next launch.",
+          secret: false,
+        }}
+        current={status?.pypiIndex}
+        onStatus={onStatus}
+      />
+    </SettingsCard>
+  );
+}
+
+/**
  * Paperclip literature search: saving the key adds a global MCP connector
  * that sends it (server agent/paperclip.ts); this card also reports and
  * repairs that connector, e.g. for a key set in .env by hand.
@@ -558,6 +595,7 @@ export function ServicesPanel() {
           <PaperclipCard status={status} onStatus={setStatus} />
           <ModalCredentialPair status={status} onStatus={setStatus} />
           <ModalCacheCard connected={modalConnected} />
+          <PypiMirrorCard status={status} onStatus={setStatus} />
         </>
       )}
 

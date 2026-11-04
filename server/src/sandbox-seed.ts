@@ -9,7 +9,7 @@
  *
  * Files are written only if missing, so user edits are never clobbered.
  */
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { findUv } from "./binaries.ts";
@@ -304,6 +304,20 @@ export function restoreAgentsMd(paths: ProjectPaths): void {
 }
 
 /**
+ * Child env for `uv sync` in a project sandbox.
+ *
+ * A sandbox has no lockfile — `uv sync` resolves from pyproject.toml each
+ * time, so unlike the helper venv (helpers-env.ts) there is nothing to
+ * rewrite and `UV_DEFAULT_INDEX` is honoured as-is. Kept in one place so
+ * both the blocking and the async sync agree.
+ */
+function sandboxUvEnv(): NodeJS.ProcessEnv {
+  const index = process.env.KADY_PYPI_INDEX?.trim();
+  if (!index) return process.env;
+  return { ...process.env, UV_DEFAULT_INDEX: index };
+}
+
+/**
  * Pre-warm the sandbox venv (`uv sync`) so the agent's first `uv run` doesn't
  * pay the install cost. Best-effort: returns false when uv is missing or sync
  * fails; `uv run` still self-heals later.
@@ -318,6 +332,37 @@ export function syncSandboxVenv(paths: ProjectPaths, opts?: { force?: boolean })
     cwd: paths.sandbox,
     stdio: "ignore",
     timeout: 5 * 60 * 1000,
+    env: sandboxUvEnv(),
   });
   return res.status === 0;
+}
+
+/**
+ * `syncSandboxVenv` without blocking the event loop.
+ *
+ * `spawnSync` stops the whole backend for as long as the install takes, and a
+ * cold sandbox venv downloads numpy/pandas/scipy/matplotlib — minutes on a
+ * slow link. `POST /projects/:id/sandbox/init` runs this on project creation,
+ * so blocking there froze every open tab's SSE stream and `/health` too. Same
+ * fix as `syncHelperVenvAsync` in helpers-env.ts: hand the work to a child and
+ * resolve when it exits. `uv run` self-heals later if this fails.
+ *
+ * Resolves to the exit status, or null when uv is unavailable.
+ */
+export function syncSandboxVenvAsync(paths: ProjectPaths, opts?: { force?: boolean }): Promise<number | null> {
+  seedSandboxFiles(paths, opts);
+  const uv = findUv();
+  if (!uv) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const child = spawn(uv, ["sync"], { cwd: paths.sandbox, stdio: "ignore", env: sandboxUvEnv() });
+    const timer = setTimeout(() => child.kill(), 5 * 60 * 1000);
+    child.once("error", () => {
+      clearTimeout(timer);
+      resolve(null);
+    });
+    child.once("close", (code) => {
+      clearTimeout(timer);
+      resolve(code);
+    });
+  });
 }

@@ -34,6 +34,47 @@ export const HELPERS_VENV_DIR = path.resolve(
   process.env.KADY_HELPERS_VENV?.trim() || path.join(HELPERS_DIR, ".venv"),
 );
 
+/**
+ * A PyPI mirror, when the user set `KADY_PYPI_INDEX` (e.g.
+ * `https://pypi.tuna.tsinghua.edu.cn/simple`).
+ *
+ * Worth having because the mirror is not a preference: the first launch
+ * installs ~553 MB of wheels, and on a link where the mirror is reachable but
+ * files.pythonhosted.org is slow, the same install measured 17m22s against
+ * 26s — past this module's own timeout, so the venv simply never finished.
+ *
+ * `UV_DEFAULT_INDEX` alone would not be enough here: uv.lock records absolute
+ * artifact URLs (`files.pythonhosted.org/...`) and `--frozen` downloads from
+ * them verbatim, ignoring every index setting. The mirror therefore also
+ * rewrites the lock's registry and artifact hosts — versions and sha256
+ * digests are kept as they are, so what lands in the venv is still the
+ * audited package the lock pinned.
+ */
+function pypiIndex(): string | null {
+  const raw = process.env.KADY_PYPI_INDEX?.trim();
+  if (!raw) return null;
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    return raw.replace(/\/+$/, "");
+  } catch {
+    return null;
+  }
+}
+
+/** Artifact hosts a mirror URL stands in for, given its own host. */
+function mirrorHosts(index: string): { registry: string; artifact: string } {
+  return { registry: index, artifact: new URL(index).origin };
+}
+
+/** Point a lockfile's PyPI URLs at `index`, leaving versions and hashes alone. */
+function rewriteLockForMirror(source: string, index: string): string {
+  const { registry, artifact } = mirrorHosts(index);
+  return source
+    .split("https://pypi.org/simple").join(registry)
+    .split("https://files.pythonhosted.org").join(artifact);
+}
+
 /** uv may update its lock/project files; signed app resources are read-only. */
 export function helperProjectDirectory(): string {
   const override = process.env.KADY_HELPERS_PROJECT_DIR?.trim();
@@ -41,9 +82,15 @@ export function helperProjectDirectory(): string {
   const destination = path.resolve(override);
   if (destination === HELPERS_DIR) return HELPERS_DIR;
   fs.mkdirSync(destination, { recursive: true });
+  const index = pypiIndex();
   for (const name of ["pyproject.toml", "uv.lock"]) {
     const source = path.join(HELPERS_DIR, name);
-    fs.copyFileSync(source, path.join(destination, name));
+    const target = path.join(destination, name);
+    if (name === "uv.lock" && index) {
+      fs.writeFileSync(target, rewriteLockForMirror(fs.readFileSync(source, "utf-8"), index), "utf-8");
+    } else {
+      fs.copyFileSync(source, target);
+    }
   }
   return destination;
 }
@@ -92,8 +139,17 @@ export function helperPython(): string {
  * payload while the environment lands somewhere writable.
  */
 function uvSyncEnv(): NodeJS.ProcessEnv {
-  if (HELPERS_VENV_DIR === path.join(HELPERS_DIR, ".venv")) return process.env;
-  return { ...process.env, UV_PROJECT_ENVIRONMENT: HELPERS_VENV_DIR };
+  const env: NodeJS.ProcessEnv =
+    HELPERS_VENV_DIR === path.join(HELPERS_DIR, ".venv")
+      ? { ...process.env }
+      : { ...process.env, UV_PROJECT_ENVIRONMENT: HELPERS_VENV_DIR };
+  // `--frozen` takes artifact URLs from the lock, so the index variable only
+  // matters for a re-resolve; the lock rewrite above is what actually moves
+  // the download. Set it anyway for the case where the lock and the mirror
+  // disagree enough that uv re-resolves.
+  const index = pypiIndex();
+  if (index) env.UV_DEFAULT_INDEX = index;
+  return env;
 }
 
 /** Best-effort `uv sync` of the helper venv. Returns false when uv is unavailable
@@ -140,7 +196,12 @@ export function syncHelperVenvAsync(): Promise<number | null> {
       stdio: "ignore",
       env: uvSyncEnv(),
     });
-    const timer = setTimeout(() => child.kill(), 15 * 60 * 1000);
+    // Long enough for a cold install on a slow link: measured 17m22s against
+    // PyPI from a residential connection in China, where the previous 15
+    // minutes killed the child mid-download and left no interpreter at all.
+    // The mirror path finishes in well under a minute; this ceiling only
+    // guards against a hung transfer.
+    const timer = setTimeout(() => child.kill(), 45 * 60 * 1000);
     child.once("error", (error) => {
       clearTimeout(timer);
       helperState.state = "failed";
@@ -169,7 +230,8 @@ function runUvSync() {
   return spawnSync(uv, ["sync", "--frozen", "--python", "3.12"], {
     cwd: helperProjectDirectory(),
     stdio: "ignore",
-    timeout: 15 * 60 * 1000,
+    // Same ceiling as the async path, for the same reason.
+    timeout: 45 * 60 * 1000,
     env: uvSyncEnv(),
   });
 }

@@ -45,7 +45,7 @@ import {
   updateSkillFromSource,
   writeSkillSource,
 } from "../agent/skills-install.ts";
-import { syncSandboxVenv } from "../sandbox-seed.ts";
+import { syncSandboxVenvAsync } from "../sandbox-seed.ts";
 
 interface ScopeQuery {
   scope?: string;
@@ -371,8 +371,13 @@ export async function registerSkillRoutes(app: FastifyInstance): Promise<void> {
       seedSubagentResources(paths);
       const allowRemote = req.query.remote !== "false";
       const count = await seedProjectSkills(paths, allowRemote);
-      const venvSynced = req.query.venv === "true" ? syncSandboxVenv(paths) : false;
-      return { ok: true, skills: count, venvSynced };
+      // Not awaited, for the same reason as the project route: a cold venv
+      // installs for minutes, and `spawnSync` here stopped every other
+      // request — including open tabs' streams — for that whole time.
+      if (req.query.venv === "true") {
+        void syncSandboxVenvAsync(paths).catch(() => {});
+      }
+      return { ok: true, skills: count, venvSyncing: req.query.venv === "true" };
     },
   );
 }
