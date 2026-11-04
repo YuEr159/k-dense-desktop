@@ -244,7 +244,19 @@ function skillTreesIn(srcDir: string): [string, string][] {
     .map((d): [string, string] => [d.name, path.join(srcDir, d.name)]);
 }
 
-function copySkillTrees(trees: Iterable<[string, string]>, paths: ProjectPaths): number {
+/**
+ * Copy whole skill trees into a project, returning how many landed.
+ *
+ * Asynchronous on purpose. `fs.cpSync` over ~1,500 files holds the event loop
+ * for the whole copy — measured at 34s on a machine whose virus scanner
+ * inspects every file written — and during that time the server answers
+ * nothing else, including the chat requests whose tab is waiting on this very
+ * endpoint. `cp` streams one file at a time and yields between them.
+ */
+async function copySkillTreesAsync(
+  trees: Iterable<[string, string]>,
+  paths: ProjectPaths,
+): Promise<number> {
   let copied = 0;
   for (const [name, src] of trees) {
     if (!fs.existsSync(path.join(src, "SKILL.md"))) continue;
@@ -255,8 +267,8 @@ function copySkillTrees(trees: Iterable<[string, string]>, paths: ProjectPaths):
       ? skillsDisabledDir(paths)
       : paths.skillsDir;
     const dest = path.join(destDir, name);
-    fs.mkdirSync(destDir, { recursive: true });
-    fs.cpSync(src, dest, { recursive: true });
+    await fs.promises.mkdir(destDir, { recursive: true });
+    await fs.promises.cp(src, dest, { recursive: true });
     copied++;
   }
   return copied;
@@ -264,20 +276,23 @@ function copySkillTrees(trees: Iterable<[string, string]>, paths: ProjectPaths):
 
 /**
  * Populate a project's skills from what is already on disk — its own set, or a
- * sibling project's — and report the count. Never touches the network, so it
- * returns in milliseconds and is safe to await inside a request.
+ * sibling project's — and report the count. Never touches the network.
  *
- * A request that needs an answer now calls this first: the remote catalogue is
- * a 460 MB download and belongs in the background (`seedProjectSkills`).
+ * Still not instant: a first project's copy is ~1,500 files, and a scanner in
+ * the loop makes that tens of seconds. It yields to the event loop throughout,
+ * so other tabs keep streaming while it runs.
  */
-export function seedLocalSkills(paths: ProjectPaths): number {
+export async function seedLocalSkills(paths: ProjectPaths): Promise<number> {
   if (countInstalledSkills(paths) > 0) {
     applyDefaultSkillStates(paths);
     return countInstalledSkills(paths);
   }
   const sibling = findSiblingSkillDirs(paths.id);
   if (sibling) {
-    for (const sourceDir of sibling) copySkillTrees(skillTreesIn(sourceDir), paths);
+    for (const sourceDir of sibling) {
+      await copySkillTreesAsync(skillTreesIn(sourceDir), paths);
+      if (countInstalledSkills(paths) > 0) break;
+    }
     if (countInstalledSkills(paths) > 0) {
       applyDefaultSkillStates(paths);
       return countInstalledSkills(paths);
@@ -294,14 +309,14 @@ export async function seedProjectSkills(
   paths: ProjectPaths,
   allowRemote = true,
 ): Promise<number> {
-  const local = seedLocalSkills(paths);
+  const local = await seedLocalSkills(paths);
   if (local > 0 || !allowRemote) return local;
   try {
     // Staging is left in place: the sync pass that follows a seed reuses the
     // same download instead of fetching the catalogue a second time.
     const catalogue = await fetchCatalogueShared();
     try {
-      copySkillTrees(
+      await copySkillTreesAsync(
         [...catalogue.skills].map(([name, skill]): [string, string] => [name, skill.dir]),
         paths,
       );

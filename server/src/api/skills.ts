@@ -372,8 +372,10 @@ export async function registerSkillRoutes(app: FastifyInstance): Promise<void> {
       seedSubagentResources(paths);
       const allowRemote = req.query.remote !== "false";
       // Same split as the project route: answer with what is local, and let a
-      // remote catalogue download run behind the response.
-      const local = seedLocalSkills(paths);
+      // remote catalogue download run behind the response. The local copy is
+      // awaited because the caller wants its count, but it no longer blocks the
+      // event loop while it runs.
+      const local = await seedLocalSkills(paths);
       const remote = local === 0 && allowRemote;
       if (remote) void seedProjectSkills(paths, true).catch(() => {});
       // Not awaited, for the same reason as the project route: a cold venv

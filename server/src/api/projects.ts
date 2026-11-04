@@ -284,13 +284,14 @@ export async function registerProjectRoutes(app: FastifyInstance): Promise<void>
       const body = req.body ?? {};
       const paths = resolvePaths(req.params.projectId);
       const allowRemote = body.download_skills !== false;
-      // Local seeding (an existing sibling's skills, or this project's own) is
-      // milliseconds and the answer is wanted; a remote catalogue fetch is a
-      // 460 MB download. Waiting on that held project creation open for ten
-      // minutes on a slow link, and the retries it provoked each started
-      // another copy. Answer with what is already local and let the download
-      // finish behind the request.
-      const local = seedLocalSkills(paths);
+      // Local seeding (an existing sibling's skills, or this project's own)
+      // never touches the network, but it is not cheap either: a first project
+      // copies ~1,500 files, and a scanner in the loop made that 34s of blocked
+      // event loop before the copy was made asynchronous. A remote catalogue
+      // fetch is a 460 MB download and stays in the background: waiting on that
+      // held project creation open for ten minutes on a slow link, and the
+      // retries it provoked each started another copy.
+      const local = await seedLocalSkills(paths);
       if (local > 0 || !allowRemote) {
         if (body.sync_venv) void syncSandboxVenvAsync(paths).catch(() => {});
         return { ok: true, skills: local, skillsSyncing: false, venvSyncing: Boolean(body.sync_venv) };
