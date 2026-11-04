@@ -926,6 +926,16 @@ async function backendAnswers() {
 }
 
 async function boot() {
+  // Put the window on screen before the services start. A cold start takes
+  // tens of seconds, and a launch that shows nothing for that long reads as
+  // "the exe did nothing" — the reported symptom was having to click the tray
+  // icon to get a window at all. `openWindow` picks the splash by itself while
+  // `servicesStarted` is false, and its own readiness poll swaps in the app, so
+  // it is deliberately not awaited here.
+  void openWindow().catch((error) => {
+    logLine("shell", `window failed to open: ${error?.stack ?? error}`);
+  });
+
   const result = await bootServices();
   if (quitting) return;
   if (!result?.ok) {
@@ -944,7 +954,8 @@ async function boot() {
     return;
   }
 
-  await openWindow();
+  // The splash is already up and its poller takes the window over; opening a
+  // second window here would put a stray one on screen.
 }
 
 // A single instance owns the ports; a second launch focuses the first window.

@@ -130,4 +130,32 @@ describe("pollUntilReady", () => {
     assert.equal(res, false);
     assert.ok(Date.now() - started < 4000, "did not block past the deadline");
   });
+
+  // The backend serves routes, not a landing page: `GET /` is a 404. Probing
+  // the bare origin therefore never succeeded, and every launch sat on the
+  // ten-minute deadline issuing two requests a second. The window only came up
+  // through `openWindow`'s one-shot probe — which is why a launch that missed
+  // it looked like the exe did nothing until the tray was clicked.
+  it("probes the backend's liveness endpoint, not its bare origin", async () => {
+    const backend = await listen((req, res) => {
+      if (req.url === "/health") {
+        res.writeHead(200, { "Content-Type": "text/plain" });
+        res.end("ok");
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+    const ui = await listen(ok);
+    assert.equal(
+      await pollUntilReady({
+        backendUrl: backend,
+        uiUrl: ui,
+        deadline: Date.now() + 2000,
+        pollMs: 25,
+      }),
+      true,
+      "a backend whose root 404s must still read as ready",
+    );
+  });
 });

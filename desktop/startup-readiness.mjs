@@ -25,6 +25,23 @@ export async function answers(url, timeoutMs = 1500) {
 }
 
 /**
+ * The URL that says a service is up.
+ *
+ * The backend's `GET /` is a 404 — it serves routes, not a landing page — so
+ * probing its bare origin never succeeds and the poller rides the full
+ * ten-minute deadline, issuing two requests a second the whole time. `/health`
+ * is its documented liveness endpoint. The frontend is the opposite case: its
+ * root *is* the interface, and it has no `/health` route.
+ */
+function probeUrl(base, healthPath) {
+  try {
+    return healthPath ? `${new URL(base).origin}${healthPath}` : base;
+  } catch {
+    return base;
+  }
+}
+
+/**
  * Resolve true once both services answer, false on the deadline or when
  * `stopped()` turns true (the window navigated or went away — something else
  * already took responsibility for what the user sees).
@@ -41,10 +58,15 @@ export async function pollUntilReady({
   probe = answers,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 } = {}) {
+  // The backend has no page at its root — `GET /` is a 404 — so probing the
+  // bare origin never succeeds. Every launch then rode the full ten-minute
+  // deadline at two requests a second, and the window only appeared via the
+  // one-shot probe in `openWindow`. `/health` is its liveness endpoint.
+  const backendProbe = probeUrl(backendUrl, "/health");
   while (Date.now() < deadline) {
     await sleep(pollMs);
     if (stopped()) return false;
-    if (!(await probe(backendUrl))) continue;
+    if (!(await probe(backendProbe))) continue;
     if (stopped()) return false;
     if (await probe(uiUrl)) return true;
   }
