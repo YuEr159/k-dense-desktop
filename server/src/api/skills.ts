@@ -21,6 +21,7 @@ import {
   listSkillsWithProblems,
   projectSkillRoot,
   readSkillSource,
+  seedLocalSkills,
   seedProjectSkills,
   skillRootForScope,
   SKILL_NAME_RE,
@@ -370,14 +371,23 @@ export async function registerSkillRoutes(app: FastifyInstance): Promise<void> {
       const paths = activePaths();
       seedSubagentResources(paths);
       const allowRemote = req.query.remote !== "false";
-      const count = await seedProjectSkills(paths, allowRemote);
+      // Same split as the project route: answer with what is local, and let a
+      // remote catalogue download run behind the response.
+      const local = seedLocalSkills(paths);
+      const remote = local === 0 && allowRemote;
+      if (remote) void seedProjectSkills(paths, true).catch(() => {});
       // Not awaited, for the same reason as the project route: a cold venv
       // installs for minutes, and `spawnSync` here stopped every other
       // request — including open tabs' streams — for that whole time.
       if (req.query.venv === "true") {
         void syncSandboxVenvAsync(paths).catch(() => {});
       }
-      return { ok: true, skills: count, venvSyncing: req.query.venv === "true" };
+      return {
+        ok: true,
+        skills: local,
+        skillsSyncing: remote,
+        venvSyncing: req.query.venv === "true",
+      };
     },
   );
 }

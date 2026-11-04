@@ -334,6 +334,10 @@ function buildApplicationMenu() {
   const helpItem = {
     label: t("menu.help"),
     submenu: [
+      // A packaged app has no terminal. Showing the log in its own window is
+      // what makes "it hangs" reportable: the user can read the last lines and
+      // copy them without hunting for a hidden folder.
+      { label: t("menu.viewLog"), click: () => void showLogWindow() },
       { label: t("menu.openLogs"), click: () => void openLogsFolder() },
       { label: t("menu.openData"), click: () => void shell.openPath(dataRoot()) },
       ...(isDev ? [{ type: "separator" }, { role: "toggleDevTools" }] : []),
@@ -391,6 +395,72 @@ async function openLogsFolder() {
   const dir = logsDirectory(dataRoot());
   fs.mkdirSync(dir, { recursive: true });
   await shell.openPath(dir);
+}
+
+/** The log in its own window, newest lines last, refreshed while it is open. */
+let logWindow = null;
+
+async function showLogWindow() {
+  if (logWindow && !logWindow.isDestroyed()) {
+    logWindow.focus();
+    return;
+  }
+  logWindow = new BrowserWindow({
+    width: 900,
+    height: 640,
+    title: t("menu.viewLog"),
+    backgroundColor: chromeBackground(),
+    autoHideMenuBar: true,
+    webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true },
+  });
+  logWindow.once("closed", () => {
+    logWindow = null;
+  });
+  await logWindow.loadURL(logDocumentUrl()).catch(() => {});
+}
+
+/**
+ * A `data:` document with the last chunk of the log baked in.
+ *
+ * Reloading the window re-reads the file, which is the whole refresh story:
+ * the point is to read what happened before a hang, not to tail it live.
+ */
+function logDocumentUrl() {
+  const file = logPath();
+  let text = "";
+  try {
+    if (file && fs.existsSync(file)) {
+      const stat = fs.statSync(file);
+      // Tail a bounded window: the interesting part of a failed launch is the
+      // end, and a 5 MB log would take a moment to hand to the renderer.
+      const start = Math.max(0, stat.size - 256 * 1024);
+      const fd = fs.openSync(file, "r");
+      try {
+        const buffer = Buffer.alloc(stat.size - start);
+        fs.readSync(fd, buffer, 0, buffer.length, start);
+        text = buffer.toString("utf-8");
+      } finally {
+        fs.closeSync(fd);
+      }
+    }
+  } catch (error) {
+    text = `Could not read the log: ${error instanceof Error ? error.message : String(error)}`;
+  }
+  const escaped = text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+  const html = `<!doctype html><meta charset="utf-8">
+    <title>${t("menu.viewLog")}</title>
+    <body style="margin:0;background:${chromeBackground()};color:#a1a1aa;
+                 font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace">
+      <div style="position:sticky;top:0;padding:8px 12px;background:${chromeBackground()};
+                  border-bottom:1px solid #27272a;color:#a1a1aa">
+        ${escaped.length === 0 ? t("log.empty") : t("log.hint", { path: file ?? "" })}
+      </div>
+      <pre style="margin:0;padding:12px;white-space:pre-wrap;word-break:break-all">${escaped}</pre>
+    </body>`;
+  return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
 }
 
 /**
@@ -695,6 +765,7 @@ function startStatusPolling(window) {
       if (!res.ok) throw new Error(String(res.status));
       const body = await res.json();
       const helpers = body?.setup?.helpers;
+      const catalogue = body?.setup?.catalogue;
       if (helpers?.state === "syncing") {
         say(t("splash.python"), t("splash.pythonHint"));
       } else if (helpers?.state === "failed") {
@@ -702,6 +773,10 @@ function startStatusPolling(window) {
           t("splash.starting"),
           t("splash.pythonFailed", { detail: helpers.detail ?? "uv sync failed" }),
         );
+      } else if (catalogue?.state === "syncing") {
+        // A first launch downloads the skill catalogue (460 MB). Saying so is
+        // the difference between "slow" and "frozen" on a poor link.
+        say(t("splash.skills"), t("splash.skillsHint"));
       } else {
         say(t("splash.starting"), t("splash.loadingUi"));
       }

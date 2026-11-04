@@ -20,7 +20,7 @@ import {
 import { KADY_PI_AGENT_DIR, PROJECTS_ROOT } from "../config.ts";
 import type { ProjectPaths } from "../projects.ts";
 import type { ToggleResult } from "./capability-state.ts";
-import { fetchCatalogue } from "./skills-fetch.ts";
+import { fetchCatalogueShared } from "./skills-fetch.ts";
 
 const DEFAULT_DISABLED_MIGRATION = "package-skills-disabled-v1";
 
@@ -263,18 +263,18 @@ function copySkillTrees(trees: Iterable<[string, string]>, paths: ProjectPaths):
 }
 
 /**
- * Ensure a project's skills dir is populated. Returns the number of skills.
- * `allowRemote=false` skips the download (fast path only).
+ * Populate a project's skills from what is already on disk — its own set, or a
+ * sibling project's — and report the count. Never touches the network, so it
+ * returns in milliseconds and is safe to await inside a request.
+ *
+ * A request that needs an answer now calls this first: the remote catalogue is
+ * a 460 MB download and belongs in the background (`seedProjectSkills`).
  */
-export async function seedProjectSkills(
-  paths: ProjectPaths,
-  allowRemote = true,
-): Promise<number> {
+export function seedLocalSkills(paths: ProjectPaths): number {
   if (countInstalledSkills(paths) > 0) {
     applyDefaultSkillStates(paths);
     return countInstalledSkills(paths);
   }
-
   const sibling = findSiblingSkillDirs(paths.id);
   if (sibling) {
     for (const sourceDir of sibling) copySkillTrees(skillTreesIn(sourceDir), paths);
@@ -283,23 +283,34 @@ export async function seedProjectSkills(
       return countInstalledSkills(paths);
     }
   }
-  if (allowRemote) {
+  return 0;
+}
+
+/**
+ * Ensure a project's skills dir is populated. Returns the number of skills.
+ * `allowRemote=false` skips the download (fast path only).
+ */
+export async function seedProjectSkills(
+  paths: ProjectPaths,
+  allowRemote = true,
+): Promise<number> {
+  const local = seedLocalSkills(paths);
+  if (local > 0 || !allowRemote) return local;
+  try {
+    // Staging is left in place: the sync pass that follows a seed reuses the
+    // same download instead of fetching the catalogue a second time.
+    const catalogue = await fetchCatalogueShared();
     try {
-      // Staging is left in place: the sync pass that follows a seed reuses the
-      // same download instead of fetching the catalogue a second time.
-      const catalogue = await fetchCatalogue();
-      try {
-        copySkillTrees(
-          [...catalogue.skills].map(([name, skill]): [string, string] => [name, skill.dir]),
-          paths,
-        );
-      } finally {
-        catalogue.cleanup();
-      }
-    } catch {
-      // A failed download leaves the project skill-less but usable; the daily
-      // sync and the Settings refresh both retry.
+      copySkillTrees(
+        [...catalogue.skills].map(([name, skill]): [string, string] => [name, skill.dir]),
+        paths,
+      );
+    } finally {
+      catalogue.cleanup();
     }
+  } catch {
+    // A failed download leaves the project skill-less but usable; the daily
+    // sync and the Settings refresh both retry.
   }
   applyDefaultSkillStates(paths);
   return countInstalledSkills(paths);

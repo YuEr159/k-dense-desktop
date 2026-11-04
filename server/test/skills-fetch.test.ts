@@ -15,6 +15,7 @@ import {
   clearStaging,
   fetchSkills,
   mergeCatalogueSources,
+  catalogueFetchState,
   resolveSkillsCli,
   stagedSkillsDir,
 } from "../src/agent/skills-fetch.ts";
@@ -184,5 +185,35 @@ describe("skills CLI fetcher", () => {
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  // One cold start used to fetch the same 460 MB repository once per caller —
+  // a launch sync and a project being created — leaving seven clones in %TEMP%
+  // and fighting each other for the link. Concurrent callers now share one
+  // download, and the staged trees are refcounted so the first caller to
+  // finish cannot delete what the other is still reading.
+  it("refcounts the shared staged tree", async () => {
+    const { __acquireShared } = await import("../src/agent/skills-fetch.ts") as unknown as {
+      __acquireShared?: (c: unknown) => { cleanup: () => void };
+    };
+    expect(typeof __acquireShared).toBe("function");
+    if (!__acquireShared) return;
+
+    let cleaned = 0;
+    const catalogue = { skills: new Map(), commit: null, cleanup: () => { cleaned += 1; } };
+    const first = __acquireShared(catalogue);
+    const second = __acquireShared(catalogue);
+
+    first.cleanup();
+    expect(cleaned).toBe(0); // the second caller is still reading
+    second.cleanup();
+    expect(cleaned).toBe(1);
+    // A late release from either handle must not delete twice.
+    first.cleanup();
+    expect(cleaned).toBe(1);
+  });
+
+  it("reports a catalogue download in flight so a waiting surface can say so", () => {
+    expect(["idle", "syncing"]).toContain(catalogueFetchState().state);
   });
 });

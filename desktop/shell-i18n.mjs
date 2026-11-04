@@ -23,6 +23,9 @@ const COPY = {
     "menu.help": "Help",
     "menu.quit": "Quit {app}",
     "menu.openLogs": "Open logs folder",
+    "menu.viewLog": "View log",
+    "log.empty": "The log is empty — nothing has been written yet.",
+    "log.hint": "Newest lines last. {path}",
     "menu.openData": "Open data folder",
 
     "tray.open": "Open {app}",
@@ -46,6 +49,9 @@ const COPY = {
     "splash.python": "Preparing Python previews…",
     "splash.pythonHint": "Installing scientific Python packages. This happens once, and can take several minutes.",
     "splash.pythonFailed": "Python previews are unavailable ({detail}). The app still works.",
+    "splash.skills": "Downloading the skill library…",
+    "splash.skillsHint": "About 460 MB, once. Later projects copy from it locally.",
+    "splash.skillsFailed": "The skill library could not be downloaded. Settings → Skills retries.",
     "splash.slow": "Starting the interface…",
     "splash.slowHint": "The first launch takes longer than later ones.",
 
@@ -92,6 +98,9 @@ const COPY = {
     "menu.help": "帮助",
     "menu.quit": "退出 {app}",
     "menu.openLogs": "打开日志文件夹",
+    "menu.viewLog": "查看日志",
+    "log.empty": "日志为空——还没有写入任何内容。",
+    "log.hint": "最新内容在最后。{path}",
     "menu.openData": "打开数据文件夹",
 
     "tray.open": "打开 {app}",
@@ -115,6 +124,9 @@ const COPY = {
     "splash.python": "正在准备 Python 预览环境…",
     "splash.pythonHint": "正在安装科学计算所需的 Python 包。只需一次，可能需要几分钟。",
     "splash.pythonFailed": "Python 预览不可用（{detail}）。应用其余功能正常。",
+    "splash.skills": "正在下载技能库…",
+    "splash.skillsHint": "约 460 MB，只需一次。之后新建项目从本地复制。",
+    "splash.skillsFailed": "技能库下载失败。可在 设置 → 技能 重试。",
     "splash.slow": "正在启动界面…",
     "splash.slowHint": "首次启动比之后几次要慢。",
 

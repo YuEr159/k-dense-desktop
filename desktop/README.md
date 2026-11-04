@@ -151,13 +151,23 @@ PortableGit 2.56 把工具链从 `mingw64/` 移到了 `ucrt64/`；脚本按存�
 | `KADY_MODELS_CATALOGUE` | 模型目录 JSON 路径 |
 | `KADY_FRONTEND_PORT` | 后端信任的前端来源端口（CORS） |
 | `KADY_PYPI_INDEX` | `uv sync` 用的包索引（Settings → Services 亦可设）。默认 PyPI |
+| `KADY_SKILLS_AUTO_SYNC` | 设为 `0` 关闭启动时和每日的技能目录同步。离线或计费网络下有用 |
+
+## 排查启动问题
+
+安装版没有终端，所以界面里留了两个入口：
+
+- **帮助 → 查看日志**：在独立窗口里显示 `shell.log` 末尾 256 KB，最新内容在最后。卡住或报错时把这里的内容复制出来即可。
+- **帮助 → 打开日志文件夹**：直接定位到 `%APPDATA%\Kady\data\logs\shell.log`（5 MB × 3 轮转）。
+
+启动画面会说明正在做什么：`正在准备 Python 预览环境…`（首次约 550 MB）或 `正在下载技能库…`（首次约 460 MB）。看到这两行说明在工作，不是卡死。
 
 ## 尚未完成
 
 - **代码签名**：当前产物未签名，Windows 会弹 SmartScreen 警告。配置本身已就绪——electron-builder 在没有 `WIN_CSC_LINK` 时会自然跳过签名，所以只要在 CI 里加上证书环境变量，下一次构建就会自动签名，无需改配置。注意不要加回 `signExecutable: false`：它是一个硬开关，会让配了证书也照样不签。
 - **自动更新**：上游 release 无二进制产物，需自建版本端点（参考 DSH Desktop 的做法）
 - **首次启动的 Python 环境**：`uv sync` 会构建两个 venv（沙箱 + 预览 helper）。预览 helper 的冷安装实测 553 MB；默认 PyPI CDN 在受限网络下 17 分 22 秒，换区域镜像 26 秒。Settings → Services → Python package mirror 可填镜像地址（`KADY_PYPI_INDEX`），只换主机名，版本与 sha256 仍由随包 lockfile 固定。
-- **技能库的网络依赖**：`skills` CLI 每次同步都重新 `git clone` 上游仓库（460 MB），网络不稳时会报 `SSL/TLS handshake` 或 `invalid index-pack output`。系统 Git 用同样命令也会失败，不是捆绑版的问题。已抓取过的缓存落在 `%TEMP%/kady-desk-skills/`，但 CLI 不复用它
+- **技能库的网络依赖**：首次需要下载 460 MB 的上游技能目录。此前这件事会让项目创建请求挂住十几分钟（每源 5 分钟 CLI 超时 + 5 分钟 clone 回退并发跑），而且重试会各自再拉一份——实测一次冷启动留下 7 个 `git clone`、23 个临时目录共 5.4 GB。现在：整次下载有 2 分钟总上限（`CATALOGUE_DEADLINE_MS`），并发调用共享同一次下载且暂存树按引用计数清理，`sandbox/init` 只等本地部分、远程播种转到后台。启动画面会显示 `正在下载技能库…`。下载失败不阻塞使用，Settings → Skills 可重试。
 - **macOS**：本分支提供原生打包与 uv，详见 [macOS 说明](MACOS.md)。
 - **Linux**：配置未验证；依赖系统 bash、git 和 uv。
 

@@ -30,6 +30,32 @@ import {
 } from "../config.ts";
 
 const FETCH_TIMEOUT_MS = 5 * 60 * 1000;
+
+/**
+ * Ceiling for one whole catalogue download.
+ *
+ * Per-source timeouts are not a bound: each source may spend their CLI budget
+ * and then a second one on the clone fallback, all concurrently. Two minutes
+ * is past what a working link needs (the staged tree is 460 MB) and short
+ * enough that a first-run request visibly gives up instead of hanging.
+ */
+const CATALOGUE_DEADLINE_MS = 2 * 60 * 1000;
+
+/**
+ * Whether a catalogue download is in flight, so a surface that is waiting can
+ * say so. A first launch downloads 460 MB before any skill exists; without a
+ * line about it the app looks hung, which is exactly how it was reported.
+ */
+export interface CatalogueState {
+  state: "idle" | "syncing";
+  startedAt?: number;
+}
+
+const catalogueState: CatalogueState = { state: "idle" };
+
+export function catalogueFetchState(): CatalogueState {
+  return { ...catalogueState };
+}
 /** Trailing CLI output kept for error messages. */
 const OUTPUT_TAIL_LIMIT = 4096;
 
@@ -358,7 +384,6 @@ function runGitClone(repo: string, branch: string, target: string): Promise<void
     });
   });
 }
-
 function runGitRevParse(cwd: string): Promise<string | null> {
   return new Promise((resolve) => {
     const child = spawn("git", ["rev-parse", "HEAD"], {
@@ -413,6 +438,9 @@ async function stageSource(
       ...(source.skills ? { names: [...source.skills] } : {}),
       cacheKey: source.cacheKey,
     });
+    // The CLI stages under the shared cache dir, which outlives this call by
+    // design (the sync pass reuses it). Removing it here would throw away a
+    // download the caller may still be reading.
     return { skillsDir: staged.skillsDir, commit: null, cleanup: () => {} };
   } catch (err) {
     onFallback?.(`${source.repo}: ${err instanceof Error ? err.message : String(err)}`);
@@ -464,8 +492,27 @@ export function mergeCatalogueSources(
  *
  * All or nothing: a catalogue missing one source's skills would read as those
  * skills having been removed upstream, and sync would archive them.
+ *
+ * A whole-catalogue deadline caps what the per-source timeouts cannot: each
+ * source gets five minutes for the CLI plus five more for its clone fallback,
+ * and both run at once, so a dead network kept a first-run request open for
+ * ten minutes with nothing on screen. Past the deadline the call rejects and
+ * the caller degrades (a project is created without skills, seeded later).
  */
 export async function fetchCatalogue(
+  onFallback?: (reason: string) => void,
+): Promise<FetchedCatalogue> {
+  catalogueState.state = "syncing";
+  catalogueState.startedAt = Date.now();
+  try {
+    return await fetchCatalogueInner(onFallback);
+  } finally {
+    catalogueState.state = "idle";
+    delete catalogueState.startedAt;
+  }
+}
+
+async function fetchCatalogueInner(
   onFallback?: (reason: string) => void,
 ): Promise<FetchedCatalogue> {
   const sources: CatalogueFetchSource[] = [
@@ -475,15 +522,40 @@ export async function fetchCatalogue(
       cacheKey: `${CATALOGUE_CACHE_KEY}-${cacheKeyForSource(source.repo, source.branch)}`,
     })),
   ];
-  const settled = await Promise.allSettled(
+  const staging = Promise.allSettled(
     sources.map((source) => stageSource(source, onFallback)),
   );
-  const staged = settled.flatMap((result) =>
-    result.status === "fulfilled" ? [result.value] : [],
-  );
+  // Own the resolution: a source that finishes after the deadline still staged
+  // ~500 MB into %TEMP%, and nothing else would ever remove it. Collecting
+  // every settled result — not just the ones that beat the deadline — is what
+  // keeps a timed-out download from leaving its tree behind.
+  const staged: StagedSource[] = [];
+  void staging.then((results) => {
+    for (const result of results) {
+      if (result.status === "fulfilled") staged.push(result.value);
+    }
+  });
   const cleanup = (): void => {
     for (const source of staged) source.cleanup();
   };
+
+  const deadline = new Promise<never>((_, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`skill catalogue download exceeded ${CATALOGUE_DEADLINE_MS / 1000}s`)),
+      CATALOGUE_DEADLINE_MS,
+    );
+    timer.unref();
+  });
+  let settled: PromiseSettledResult<StagedSource>[];
+  try {
+    settled = await Promise.race([staging, deadline]);
+  } catch (err) {
+    // Everything still in flight cleans up when it lands, not now: there is
+    // nothing to remove yet, and `staged` above is the only owner of it.
+    void staging.then(cleanup, cleanup);
+    throw err;
+  }
+
   const failed = settled.find(
     (result): result is PromiseRejectedResult => result.status === "rejected",
   );
@@ -502,3 +574,75 @@ export async function fetchCatalogue(
     cleanup,
   };
 }
+
+/**
+ * One catalogue download at a time, process-wide.
+ *
+ * A launch sync and a project being created both need the catalogue, and each
+ * used to fetch its own copy: one cold start had seven `git clone`s of the
+ * same 460 MB repository running at once, all writing into `%TEMP%` and
+ * fighting for the same link. Callers share one in-flight download; a
+ * completed one is reused for `CATALOGUE_REUSE_MS` because the staged trees
+ * stay on disk anyway.
+ */
+let catalogueInFlight: Promise<FetchedCatalogue> | null = null;
+let catalogueFetchedAt = 0;
+
+/**
+ * One catalogue download at a time, process-wide.
+ *
+ * A launch sync and a project being created both need the catalogue, and each
+ * used to fetch its own copy: one cold start had seven `git clone`s of the
+ * same 460 MB repository running at once, all writing into `%TEMP%` and
+ * fighting for the same link. Concurrent callers share one download.
+ *
+ * The staged trees are refcounted rather than owned by the first caller:
+ * whoever finishes first must not delete a directory another caller is still
+ * reading. The last release removes them.
+ */
+let sharedHolders = 0;
+let sharedCleaned = false;
+let sharedCleanup: (() => void) | null = null;
+
+function acquireShared(catalogue: FetchedCatalogue): FetchedCatalogue {
+  if (sharedCleanup === null) {
+    sharedCleanup = catalogue.cleanup;
+    sharedCleaned = false;
+  }
+  sharedHolders += 1;
+  return {
+    ...catalogue,
+    cleanup: () => {
+      sharedHolders -= 1;
+      if (sharedHolders > 0 || sharedCleaned) return;
+      sharedCleaned = true;
+      sharedCleanup?.();
+      sharedCleanup = null;
+    },
+  };
+}
+
+export function fetchCatalogueShared(
+  onFallback?: (reason: string) => void,
+): Promise<FetchedCatalogue> {
+  if (catalogueInFlight) {
+    return catalogueInFlight.then(acquireShared);
+  }
+  catalogueInFlight = fetchCatalogue(onFallback)
+    .then((catalogue) => {
+      catalogueFetchedAt = Date.now();
+      return acquireShared(catalogue);
+    })
+    .finally(() => {
+      catalogueInFlight = null;
+    });
+  return catalogueInFlight;
+}
+
+/** When the last shared catalogue download finished, for diagnostics. */
+export function lastCatalogueFetchAt(): number {
+  return catalogueFetchedAt;
+}
+
+/** Test seam: the refcount is a small property with a large failure mode. */
+export const __acquireShared = acquireShared;

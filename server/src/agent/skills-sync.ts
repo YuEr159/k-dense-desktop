@@ -16,7 +16,7 @@ import {
   resolvePaths,
   type ProjectPaths,
 } from "../projects.ts";
-import { fetchCatalogue, type CatalogueSkill } from "./skills-fetch.ts";
+import { fetchCatalogueShared, type CatalogueSkill } from "./skills-fetch.ts";
 import {
   asSkillRoot,
   isSkillDefaultDisabled,
@@ -750,7 +750,7 @@ async function withRemoteCatalogue<T>(work: (catalogue: Catalogue) => T): Promis
   syncActive = true;
   let cleanup: (() => void) | null = null;
   try {
-    const fetched = await fetchCatalogue();
+    const fetched = await fetchCatalogueShared();
     cleanup = fetched.cleanup;
     return work({
       skills: indexCatalogueSkills(fetched.skills),

@@ -49,6 +49,7 @@ import { notebookRobustness } from "./agent/notebook-robustness.ts";
 import { startAutomaticSkillSync } from "./agent/skills-sync.ts";
 import { modalJobManager } from "./modal/manager.ts";
 import { HELPERS_VENV_DIR, helperVenvState, syncHelperVenvAsync } from "./helpers-env.ts";
+import { catalogueFetchState } from "./agent/skills-fetch.ts";
 import { configureHttpProxy } from "./http-proxy.ts";
 
 function readCookie(req: FastifyRequest, name: string): string | undefined {
@@ -190,6 +191,10 @@ export async function buildApp() {
         state: helperVenvState().state,
         venv: HELPERS_VENV_DIR,
       },
+      // A first launch downloads the 460 MB skill catalogue. The shell shows
+      // this on the splash so a slow link reads as work in progress, not a
+      // hang — the state that produced "it freezes every time" reports.
+      catalogue: catalogueFetchState(),
     },
   }));
   app.get("/config", async () => ({ modal_configured: modalConfigured() }));
