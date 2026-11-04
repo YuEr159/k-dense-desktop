@@ -1685,5 +1685,12 @@
   "A second model reviews what the agent just did and steers findings into the chat: raw data touched, silent row drops, unlogged parameter changes, claims without evidence. Per project; applies to new chat tabs.": "由第二个模型复核代理刚做的事，并把发现反馈到对话中：原始数据被动过、静默丢行、未记录的参数改动、无证据的断言。按项目生效；只作用于新开的聊天标签页。",
   "Built-in specialists {0}": "内置专家 {0}",
   "Named OpenRouter Fusion setups appear at the top of the model picker. Paste the full Fusion request body (see the {0}). Fusion needs OpenRouter access and is saved in this browser only.": "命名好的 OpenRouter Fusion 配置会出现在模型选择器顶部。粘贴完整的 Fusion 请求体（见 {0}）。Fusion 需要 OpenRouter 访问权限，且仅保存在此浏览器中。",
-  "A few knobs are read from {0} at startup only — e.g. {1} (update checks) and {2} (outbound proxy). Restart Kady after changing them.": "有几个开关只在启动时从 {0} 读取 — 例如 {1}（更新检查）和 {2}（出站代理）。修改后需重启 Kady。"
+  "A few knobs are read from {0} at startup only — e.g. {1} (update checks) and {2} (outbound proxy). Restart Kady after changing them.": "有几个开关只在启动时从 {0} 读取 — 例如 {1}（更新检查）和 {2}（出站代理）。修改后需重启 Kady。",
+  "Python package mirror": "Python 包镜像",
+  "Only needed where downloading from PyPI is slow. The first launch installs about 550 MB of scientific packages; on a slow link that can take much longer than starting the app again ever will.": "仅在从 PyPI 下载缓慢时才需要。首次启动会安装约 550 MB 的科学计算包；网络缓慢时，这一过程可能比之后任何一次启动都久得多。",
+  "Package index URL": "包索引地址",
+  "Leave unset to download from PyPI itself. Versions and checksums stay pinned by Kady's lockfile — this only changes where the files come from. Applies to the next launch.": "留空则从 PyPI 官方源下载。版本与校验和仍由 Kady 的 lockfile 固定——这里只改变文件的来源。下次启动时生效。",
+  "Thinking levels": "思考档位",
+  "Level mapping": "档位映射",
+  "Adaptive thinking (effort instead of token budget)": "自适应思考（用 effort 取代 token 预算）"
 }

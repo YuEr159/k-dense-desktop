@@ -41,4 +41,36 @@ describe("multi-node templates", () => {
   it.each(cases)("translates %s", (english, expectedFragment) => {
     expect(translateText(m, english)).toContain(expectedFragment);
   });
+
+  // Settings → Services → Python package mirror. These four are copied from
+  // the rendered page, not from the JSX: a card added without dictionary
+  // entries looks correct in source review and ships in English, which is how
+  // this one was missed.
+  const mirror: [string, string][] = [
+    ["Python package mirror", "Python 包镜像"],
+    ["Package index URL", "包索引地址"],
+    [
+      "Only needed where downloading from PyPI is slow. The first launch installs about 550 MB of scientific packages; on a slow link that can take much longer than starting the app again ever will.",
+      "仅在从 PyPI 下载缓慢时才需要",
+    ],
+    [
+      "Leave unset to download from PyPI itself. Versions and checksums stay pinned by Kady's lockfile — this only changes where the files come from. Applies to the next launch.",
+      "留空则从 PyPI 官方源下载",
+    ],
+  ];
+  it.each(mirror)("translates the mirror card: %s", (english, expectedFragment) => {
+    expect(translateText(m, english)).toContain(expectedFragment);
+  });
+
+  // Settings → Providers → Custom model servers. Same failure mode as the
+  // mirror card: the JSX was translated-aware only by luck, so the two
+  // collapsible section headings shipped in English.
+  const customModel: [string, string][] = [
+    ["Thinking levels", "思考档位"],
+    ["Level mapping", "档位映射"],
+    ["Adaptive thinking (effort instead of token budget)", "自适应思考"],
+  ];
+  it.each(customModel)("translates the custom-model card: %s", (english, expectedFragment) => {
+    expect(translateText(m, english)).toContain(expectedFragment);
+  });
 });
