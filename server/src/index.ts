@@ -116,7 +116,13 @@ export async function buildApp() {
   // After CORS so a 401 still carries the headers the UI needs to read it.
   registerAuth(app);
 
-  await app.register(multipart, { limits: { fileSize: 1024 * 1024 * 1024 } });
+  // `parts` counts every multipart field, and a folder upload sends two per
+  // file (`files` and its `paths` entry). The plugin's default of 1000
+  // therefore refused any folder of ~500 files with a bare "reach parts
+  // limit", which reads as a size problem and is not one.
+  await app.register(multipart, {
+    limits: { fileSize: 1024 * 1024 * 1024, parts: 20_000 },
+  });
 
   // Binary/unknown request bodies (e.g. PUT /sandbox/file) → raw Buffer.
   // JSON and text/plain keep their built-in parsers; multipart is handled above.

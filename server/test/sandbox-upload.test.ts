@@ -105,11 +105,25 @@ describe("POST /sandbox/upload", () => {
     expect(fs.readdirSync(resolvePaths("default").root).filter((name) => name.startsWith(".upload-"))).toEqual([]);
   });
 
+  // A folder upload sends two multipart fields per file (`files` and its
+  // `paths` entry), so the plugin's default `parts` ceiling of 1000 refused
+  // any folder of ~500 files. The error said "reach parts limit", which reads
+  // as a size problem and is not one.
+  it("accepts a folder of more than 500 files", async () => {
+    const files = Array.from({ length: 600 }, (_, i) => ({
+      filename: `f${i}.txt`,
+      content: "x",
+      relativePath: `big/f${i}.txt`,
+    }));
+    const res = await upload(files);
+    expect(res.statusCode).toBe(200);
+    expect(fs.readdirSync(path.join(uploadDir(), "big")).length).toBe(600);
+  });
+
   it("preserves folder uploads and permits directory aliases within the sandbox", async () => {
     const target = path.join(uploadDir(), "dataset");
     fs.mkdirSync(target);
     fs.symlinkSync(target, path.join(uploadDir(), "alias"), "junction");
-
     const res = await upload([
       { filename: "a.csv", content: "first", relativePath: "dataset/nested/a.csv" },
       { filename: "b.csv", content: "second", relativePath: "alias/nested/b.csv" },

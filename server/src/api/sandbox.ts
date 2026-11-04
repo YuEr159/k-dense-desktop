@@ -360,8 +360,24 @@ export async function registerSandboxRoutes(app: FastifyInstance): Promise<void>
       return { uploaded: saved, renamed };
     } catch (err) {
       if (err instanceof SandboxError) return handle(reply, err);
-      // Let Fastify retain multipart errors' HTTP status (for example 413
-      // when a folder exceeds its part limit), while finally clears staging.
+      // The multipart limits surface as a bare Fastify 413. Say which one was
+      // hit: "reach parts limit" reads as a size problem, and the user's fix
+      // (upload fewer files at a time) is different from the one for a file
+      // that is genuinely too large.
+      const code = (err as { code?: string }).code;
+      if (code === "FST_PARTS_LIMIT" || code === "FST_FILES_LIMIT") {
+        reply.code(413);
+        return {
+          detail:
+            "Too many files in one upload. Split the folder and upload it in batches.",
+        };
+      }
+      if (code === "FST_REQ_FILE_TOO_LARGE") {
+        reply.code(413);
+        return { detail: "A file in this upload exceeds the 1 GB per-file limit." };
+      }
+      // Let Fastify retain multipart errors' HTTP status, while finally clears
+      // staging.
       throw err;
     } finally {
       fs.rmSync(stagingRoot, { recursive: true, force: true });
