@@ -52,9 +52,11 @@ const MINGIT = {
     for (const rel of pruneList(destDir)) {
       fs.rmSync(path.join(destDir, rel), { recursive: true, force: true });
     }
+    const mingw = mingwDir(destDir);
+    const freed = pruneMatching(path.join(destDir, mingw), GUI_DLL);
+    console.log(`  pruned GUI DLLs: ${(freed / 1048576).toFixed(1)} MB`);
     // The bin/ and cmd/ shims resolve through the MinGW tree and usr; they only
     // work when the trees they point at exist, so verify the real executables.
-    const mingw = mingwDir(destDir);
     for (const rel of ["usr/bin/bash.exe", `${mingw}/bin/git.exe`]) {
       if (!fs.existsSync(path.join(destDir, rel))) {
         throw new Error(`PortableGit is missing ${rel} after pruning`);
@@ -73,6 +75,39 @@ function mingwDir(root) {
     if (fs.existsSync(path.join(root, name, "bin", "git.exe"))) return name;
   }
   throw new Error("PortableGit has neither ucrt64/bin/git.exe nor mingw64/bin/git.exe");
+}
+
+/**
+ * DLLs shipped for the Windows GUI credential helper and the Skia/Avalonia
+ * renderer, none of which git's command-line paths touch.
+ *
+ * Matched by name rather than listed one by one: the set grows with each
+ * Git for Windows release (48 files in 2.56.0.4, in both `bin/` and
+ * `libexec/git-core/`), and a static list would silently stop covering it.
+ * Verified before adding: no binary outside this set references any of them.
+ */
+const GUI_DLL = /^(SkiaSharp|libSkiaSharp|Avalonia|av_libglesv2|Microsoft\.Identity|msalruntime)/i;
+
+/** Remove every file under `dir` whose name matches `pattern`. Returns bytes freed. */
+function pruneMatching(dir, pattern) {
+  let freed = 0;
+  let entries;
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      freed += pruneMatching(full, pattern);
+      continue;
+    }
+    if (!pattern.test(entry.name)) continue;
+    freed += fs.statSync(full, { throwIfNoEntry: false })?.size ?? 0;
+    fs.rmSync(full, { force: true });
+  }
+  return freed;
 }
 
 /**

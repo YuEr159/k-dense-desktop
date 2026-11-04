@@ -63,12 +63,16 @@ test("the shell's own modules are all packaged", () => {
   // `files` is what lands in app.asar. A module the entry point imports but
   // that is missing here fails only in a packaged build, where the developer
   // running it may not be the one who can read a stack trace.
-  for (const module of ["main.mjs", "service-manager.mjs", "preflight.mjs", "runtime-env.mjs"]) {
-    assert.ok(files.includes(module), `${module} is imported but not in "files"`);
-  }
-  // The modules this pass added, by name: a rename that misses this list is
-  // exactly the mistake worth catching.
-  for (const module of ["shell-i18n.mjs", "shell-log.mjs", "page-locale.mjs", "window-state.mjs"]) {
+  //
+  // Discovered, not listed: a hand-maintained list is exactly what let a new
+  // module ship missing — the list still passed while the import broke at
+  // runtime. Every sibling `.mjs` the shell imports is covered automatically.
+  const shellModules = fs
+    .readdirSync(desktop)
+    .filter((name) => name.endsWith(".mjs"))
+    .sort();
+  assert.ok(shellModules.includes("main.mjs"), "scan found no entry point");
+  for (const module of shellModules) {
     assert.ok(files.includes(module), `${module} is imported but not in "files"`);
   }
 });
@@ -87,4 +91,23 @@ test("the macOS template icon is shipped only on macOS", () => {
   const mac = config.mac?.extraResources ?? [];
   const shipped = mac.some((entry) => (entry.filter ?? []).some((f) => f.includes("iconTemplate")));
   assert.equal(shipped, true, "macOS builds need iconTemplate.png for the menu-bar icon");
+});
+
+// `build-runtime` copies `web/.next/standalone`; it does not build it. A dist
+// script without `build:web` therefore packages whatever the last frontend
+// build left behind — which is how a Windows installer once shipped a three-day
+// old UI while every source change looked present. CI missed it because
+// release-desktop.yml runs `next build` as its own step.
+test("every dist script builds the frontend first", () => {
+  const scripts = JSON.parse(fs.readFileSync(path.join(desktop, "package.json"), "utf8")).scripts ?? {};
+  const distScripts = Object.entries(scripts).filter(([name]) => name === "dist" || name.startsWith("dist:"));
+  assert.ok(distScripts.length > 0, "found no dist scripts to check");
+  for (const [name, command] of distScripts) {
+    const web = command.indexOf("build:web");
+    const runtime = command.indexOf("build:runtime");
+    assert.ok(web !== -1, `${name} never builds the frontend`);
+    // Order matters: copying the standalone output before it exists packages
+    // the previous build, so `build:web` has to come first.
+    assert.ok(runtime === -1 || web < runtime, `${name} copies the runtime before building the frontend`);
+  }
 });

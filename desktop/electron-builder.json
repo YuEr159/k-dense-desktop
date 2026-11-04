@@ -15,6 +15,7 @@
     "shell-i18n.mjs",
     "shell-log.mjs",
     "page-locale.mjs",
+    "startup-readiness.mjs",
     "window-state.mjs",
     "package.json"
   ],
@@ -43,10 +44,15 @@
         "arch": [
           "x64"
         ]
+      },
+      {
+        "target": "zip",
+        "arch": [
+          "x64"
+        ]
       }
     ],
-    "artifactName": "Kady-${version}-${arch}-Setup.${ext}",
-    "signExecutable": false
+    "artifactName": "Kady-${version}-${arch}-Portable.${ext}"
   },
   "nsis": {
     "oneClick": false,
@@ -54,7 +60,8 @@
     "perMachine": false,
     "differentialPackage": false,
     "deleteAppDataOnUninstall": false,
-    "runAfterFinish": true
+    "runAfterFinish": true,
+    "artifactName": "Kady-${version}-${arch}-Setup.${ext}"
   },
   "mac": {
     "target": [

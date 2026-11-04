@@ -97,7 +97,12 @@ jobs:
       - name: Upload installer to the release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/Kady-*-Setup.exe
+          # The zip is the portable build: unpack and run, no installer, no
+          # admin prompt, nothing written to the registry. Same bundle, so both
+          # artifacts come out of the one electron-builder run above.
+          files: |
+            dist/Kady-*-Setup.exe
+            dist/Kady-*-Portable.zip
           generate_release_notes: true
           fail_on_unmatched_files: true
 

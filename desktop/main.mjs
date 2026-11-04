@@ -29,6 +29,7 @@ import { runtimeEnvironment } from "./runtime-env.mjs";
 import { appName, currentLanguage, setLanguageFromLocale, t } from "./shell-i18n.mjs";
 import { captureConsole, logPath, logsDirectory, logServiceLine, openLog, write as logLine } from "./shell-log.mjs";
 import { fallbackLocale, readPageLocale } from "./page-locale.mjs";
+import { pollUntilReady } from "./startup-readiness.mjs";
 import { restoreWindowState as restoreSavedWindowState, windowStateToSave } from "./window-state.mjs";
 
 const isDev = !app.isPackaged;
@@ -795,10 +796,48 @@ async function openWindow() {
   } else {
     await window.loadURL(splashHtml());
     startStatusPolling(window);
+    // The splash is a `data:` document with no script of its own, so nothing
+    // in it can ever navigate away. Without this the window stayed on
+    // "Starting local services…" forever whenever the services needed longer
+    // than `backendAnswers()`'s 1.5s probe — a cold start routinely does, since
+    // the backend is only listening once Pi has loaded (~35s measured). The
+    // poller watches for the same condition and swaps the document once.
+    await navigateWhenReady(window);
   }
 
   if (isDev) window.webContents.openDevTools({ mode: "detach" });
   return window;
+}
+
+/**
+ * Replace the splash with the app as soon as both services answer.
+ *
+ * The splash is a `data:` document with no script of its own, so nothing in it
+ * can ever navigate away. Without this the window stayed on "Starting local
+ * services…" forever whenever the services needed longer than the one 1.5s
+ * probe in `openWindow` — a cold start routinely does, because the backend is
+ * only listening once Pi has loaded (~35s measured).
+ *
+ * Stops on its own once the window navigates (for any reason) or is destroyed,
+ * and gives up rather than polling forever if the services never come up.
+ */
+async function navigateWhenReady(window) {
+  let left = false;
+  window.webContents.once("did-start-navigation", (event) => {
+    if (!event.isSameDocument) left = true;
+  });
+  window.webContents.once("destroyed", () => {
+    left = true;
+  });
+
+  const ready = await pollUntilReady({
+    backendUrl: BACKEND_URL,
+    uiUrl: UI_URL,
+    stopped: () => left || window.isDestroyed(),
+  });
+  if (!ready) return;
+  if (left || window.isDestroyed()) return;
+  await window.loadURL(UI_URL).catch(() => {});
 }
 
 /** Cheap reachability probe, used to skip the splash on a warm reopen. */

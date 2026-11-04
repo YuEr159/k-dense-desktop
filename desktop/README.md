@@ -18,7 +18,14 @@ npm install
 npm run dist
 ```
 
-产出 `dist/Kady-<version>-x64-Setup.exe`。
+产出两个文件，同一份 `win-unpacked` 打包：
+
+| 产物 | 用途 |
+|---|---|
+| `dist/Kady-<version>-x64-Setup.exe` | NSIS 安装包：可选安装目录、装到 `%LOCALAPPDATA%`、创建快捷方式 |
+| `dist/Kady-<version>-x64-Portable.zip` | 解压即用：不写注册表、不需要管理员、可放 U 盘 |
+
+`nsis.artifactName` 单独覆盖了 `win.artifactName`。两个 target 共用一条 artifactName 时，后跑的会把前一个的文件名覆盖掉。
 
 > 网络受限时需要镜像（GitHub 直连会超时）：
 > ```bash
@@ -100,7 +107,7 @@ Pi 的 `getShellConfig()` 解析顺序是：`settings.json` 的 `shellPath` → 
 
 **MinGit 不含 `bash.exe`**（只有 `git.exe` 和 `dash.exe`），而 bash 正是 agent 执行命令的核心。必须用 PortableGit。
 
-PortableGit 2.56 完整解压 342 MB。裁剪掉 vim、mintty、man/doc、git-gui/gitk 后约 **299 MB**。
+PortableGit 2.56 完整解压 342 MB。裁剪掉 vim、mintty、man/doc、git-gui/gitk 后约 **299 MB**；`scripts/fetch-externals.mjs` 另外按模式名删掉 GUI/.NET 渲染栈的 DLL（`SkiaSharp`、`Avalonia`、`av_libglesv2`、`Microsoft.Identity.*`、`msalruntime`，共 48 个文件 47.2 MB），这些只服务于 Windows 凭据管理器和凭据助手界面，`bin/` 与 `libexec/git-core/` 各有一份。裁剪后约 **252 MB**。加这条规则前用二进制字符串扫描确认过：候选集之外的任何二进制都不引用它们。
 
 > **`ucrt64/` 和 `mingw64/` 必须保留**：那是 git 本体（`git.exe` 及其链接的 DLL）和 `libexec/git-core/`（`git clone` 等子命令的实现）。早期版本曾把整个 `mingw64/` 当成"GUI 工具链"删掉，结果 `git: command not found`，而且因为本机装了系统 Git 而看不出问题。`scripts/verify-externals.mjs` 用只含捆绑目录的 PATH 验证，专门堵这个洞。
 
@@ -143,12 +150,13 @@ PortableGit 2.56 把工具链从 `mingw64/` 移到了 `ucrt64/`；脚本按存�
 | `KADY_DATA_ROOT` | 后端可写根目录（壳自动注入） |
 | `KADY_MODELS_CATALOGUE` | 模型目录 JSON 路径 |
 | `KADY_FRONTEND_PORT` | 后端信任的前端来源端口（CORS） |
+| `KADY_PYPI_INDEX` | `uv sync` 用的包索引（Settings → Services 亦可设）。默认 PyPI |
 
 ## 尚未完成
 
-- **代码签名**：`signExecutable: false`，Windows 会弹 SmartScreen 警告
+- **代码签名**：当前产物未签名，Windows 会弹 SmartScreen 警告。配置本身已就绪——electron-builder 在没有 `WIN_CSC_LINK` 时会自然跳过签名，所以只要在 CI 里加上证书环境变量，下一次构建就会自动签名，无需改配置。注意不要加回 `signExecutable: false`：它是一个硬开关，会让配了证书也照样不签。
 - **自动更新**：上游 release 无二进制产物，需自建版本端点（参考 DSH Desktop 的做法）
-- **首次启动的 Python 环境**：`uv sync` 会构建两个 venv（沙箱 + 预览 helper），耗时数分钟且需联网
+- **首次启动的 Python 环境**：`uv sync` 会构建两个 venv（沙箱 + 预览 helper）。预览 helper 的冷安装实测 553 MB；默认 PyPI CDN 在受限网络下 17 分 22 秒，换区域镜像 26 秒。Settings → Services → Python package mirror 可填镜像地址（`KADY_PYPI_INDEX`），只换主机名，版本与 sha256 仍由随包 lockfile 固定。
 - **技能库的网络依赖**：`skills` CLI 每次同步都重新 `git clone` 上游仓库（460 MB），网络不稳时会报 `SSL/TLS handshake` 或 `invalid index-pack output`。系统 Git 用同样命令也会失败，不是捆绑版的问题。已抓取过的缓存落在 `%TEMP%/kady-desk-skills/`，但 CLI 不复用它
 - **macOS**：本分支提供原生打包与 uv，详见 [macOS 说明](MACOS.md)。
 - **Linux**：配置未验证；依赖系统 bash、git 和 uv。
