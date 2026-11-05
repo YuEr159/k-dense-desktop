@@ -105,7 +105,7 @@ export function ResourceMonitor({ className }: { className?: string }) {
           />
           <MeterRow
             icon={MemoryStickIcon}
-            label="Memory"
+            label="RAM"
             pct={memPct}
             detail={`${formatBytes(stats.memory.usedBytes)} / ${formatBytes(
               stats.memory.totalBytes,

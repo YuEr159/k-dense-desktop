@@ -997,6 +997,7 @@
   "Quit the app": "退出应用",
   "RNA-seq pilot": "RNA-seq 试点",
   "Raise the limit in project settings": "在项目设置中提高上限",
+  "RAM": "内存",
   "Ran inside a subagent and was reconstructed afterward, so this step's file effects could not be observed directly. Any files below are attributed by timing, not observation.": "在子代理内运行，事后重建，因此无法直接观察该步骤的文件影响。下列文件是按时间归因的，不是观察所得。",
   "Raw tool details": "原始工具详情",
   "Raw-data guard": "原始数据保护",
