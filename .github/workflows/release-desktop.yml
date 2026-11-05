@@ -63,15 +63,15 @@ jobs:
           if [ -z "$PLATFORMS" ]; then PLATFORMS=both; fi
           VERSION=$(node -p "require('./desktop/package.json').version")
           # A tag is the human name for the build and does not have to be valid
-          # semver, so compare on a form both sides can take: strip the
-          # separators between a digit and a letter (`0.15.0-d4` and `0.15.0d4`
-          # are the same build, and so is a four-part `0.15.0.4`). Reproduce
-          # that rule here rather than depending on semver being installed at
-          # the repo root.
-          canon() {
-            node -p "process.argv[1].replace(/^v/, '').replace(/([0-9])[.-]?([A-Za-z])/g, '\$1\$2').replace(/-/g, '.')" "$1"
+          # semver, or even the same spelling as the version: `0.15.0d4`,
+          # `0.15.0-d4` and a four-part `0.15.0.4` all name the same build, and
+          # every one of them has appeared in this repository's tags. Compare
+          # the numbers they contain, in order — that is the part that
+          # identifies the build, and it is the only form all spellings share.
+          numbers() {
+            node -p "(process.argv[1].match(/\d+/g) ?? []).join('.')" "$1"
           }
-          if [ "$(canon "$TAG")" = "$(canon "v$VERSION")" ]; then
+          if [ "$(numbers "$TAG")" = "$(numbers "v$VERSION")" ]; then
             echo "desktop=true" >> "$GITHUB_OUTPUT"
           else
             echo "desktop=false" >> "$GITHUB_OUTPUT"
