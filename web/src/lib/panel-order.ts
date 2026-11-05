@@ -9,7 +9,7 @@
  * because those really do belong to each layout.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 export type PanelId = "tree" | "preview" | "chat";
 
@@ -113,9 +113,19 @@ export function usePanelOrder(): [PanelId[], (next: PanelOrderUpdater) => void] 
   const [order, setOrder] = useState<PanelId[]>(() =>
     typeof window === "undefined" ? [...DEFAULT_PANEL_ORDER] : readPanelOrder(window.localStorage),
   );
+  // The state is the render source of truth; `orderRef` lets the setter read
+  // the current value without putting the write back inside the updater,
+  // which React may run twice (StrictMode) — a swap applied twice returns the
+  // original order.
+  const orderRef = useRef(order);
+  orderRef.current = order;
 
   useEffect(() => {
-    const sync = () => setOrder(readPanelOrder(window.localStorage));
+    const sync = () => {
+      const stored = readPanelOrder(window.localStorage);
+      orderRef.current = stored;
+      setOrder(stored);
+    };
     const onStorage = (event: StorageEvent) => {
       if (event.key === PANEL_ORDER_KEY) sync();
     };
@@ -128,11 +138,12 @@ export function usePanelOrder(): [PanelId[], (next: PanelOrderUpdater) => void] 
   }, []);
 
   const set = useCallback((next: PanelOrderUpdater) => {
-    setOrder((current) => {
-      const resolved = normalizePanelOrder(typeof next === "function" ? next(current) : next);
-      writePanelOrder(window.localStorage, resolved);
-      return resolved;
-    });
+    const resolved = normalizePanelOrder(
+      typeof next === "function" ? next(orderRef.current) : next,
+    );
+    writePanelOrder(window.localStorage, resolved);
+    orderRef.current = resolved;
+    setOrder(resolved);
   }, []);
 
   return useMemo(() => [order, set], [order, set]);
