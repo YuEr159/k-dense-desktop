@@ -24,15 +24,16 @@ jobs:
         run: |
           VERSION=$(node -p "require('./desktop/package.json').version")
           TAG="${GITHUB_REF_NAME}"
-          # electron-builder validates with semver's `loose` mode and normalizes
-          # 0.15.0d1 -> 0.15.0-d1 before writing it into the installer, so both
-          # spellings must match the tag. Reproduce that one rule here rather
-          # than depending on semver being installed at the repo root.
-          NORMALIZED=$(node -p "
-            const v = require('./desktop/package.json').version;
-            v.replace(/([0-9])([A-Za-z])/g, '\$1-\$2');
-          ")
-          if [ "$TAG" = "v$VERSION" ] || [ "$TAG" = "v$NORMALIZED" ]; then
+          # A tag is the human name for the build and does not have to be valid
+          # semver, so compare on a form both sides can take: strip the
+          # separators between a digit and a letter (`0.15.0-d4` and `0.15.0d4`
+          # are the same build, and so is a four-part `0.15.0.4`). Reproduce
+          # that rule here rather than depending on semver being installed at
+          # the repo root.
+          canon() {
+            node -p "process.argv[1].replace(/^v/, '').replace(/([0-9])[.-]?([A-Za-z])/g, '\$1\$2').replace(/-/g, '.')" "$1"
+          }
+          if [ "$(canon "$TAG")" = "$(canon "v$VERSION")" ]; then
             echo "desktop=true" >> "$GITHUB_OUTPUT"
           else
             echo "desktop=false" >> "$GITHUB_OUTPUT"
