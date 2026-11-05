@@ -135,9 +135,22 @@ export interface SettingsDialogProps {
    * passes each as a new object, so a repeated deep link re-applies.
    */
   request?: OpenSettingsRequest | null;
+  /**
+   * Pane widths for the Appearance tab. Only the workspace owns these — the
+   * project overview shows the same dialog with no layout to describe, so the
+   * width block is hidden when this is absent.
+   */
+  panelWidths?: { tree: number; chat: number };
+  onPanelWidthChange?: (panel: "tree" | "chat", value: number) => void;
 }
 
-export function SettingsDialog({ open, onOpenChange, request }: SettingsDialogProps) {
+export function SettingsDialog({
+  open,
+  onOpenChange,
+  request,
+  panelWidths,
+  onPanelWidthChange,
+}: SettingsDialogProps) {
   // Skills / prompt templates edited here feed the composer's pickers, which
   // fetch once per project — announce a change when the dialog closes.
   const handleOpenChange = useCallback(
@@ -258,7 +271,10 @@ export function SettingsDialog({ open, onOpenChange, request }: SettingsDialogPr
               <ServicesPanel />
             </TabsContent>
             <TabsContent value="appearance" className="min-w-0 p-5">
-              <AppearancePanel />
+              <AppearancePanel
+                panelWidths={panelWidths}
+                onPanelWidthChange={onPanelWidthChange}
+              />
             </TabsContent>
           </div>
         </Tabs>

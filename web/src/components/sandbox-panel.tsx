@@ -596,7 +596,7 @@ export const FileTreePanel = memo(function FileTreePanel({
 
   return (
     <div
-      className="relative flex h-full flex-col border-r"
+      className="relative flex h-full flex-col"
       onDragEnter={handleDragEnter}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}

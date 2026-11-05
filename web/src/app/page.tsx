@@ -60,6 +60,14 @@ import {
 import { seedChatStateFromTab } from "@/lib/new-tab-state";
 import { useIsomorphicLayoutEffect } from "@/lib/use-isomorphic-layout-effect";
 import {
+  DEFAULT_CHAT_WIDTH,
+  DEFAULT_TREE_WIDTH,
+  clampPanelWidth,
+  handleTarget,
+  usePanelOrder,
+  type PanelId,
+} from "@/lib/panel-order";
+import {
   useCallback,
   useEffect,
   useMemo,
@@ -101,14 +109,48 @@ function defaultTabTitle(index: number): string {
   return `Chat ${index + 1}`;
 }
 
-// Thin vertical drag handle between two panels
-function ResizeHandle({ onMouseDown }: { onMouseDown: (e: React.MouseEvent) => void }) {
+// Thin vertical divider between two panels. The middle band resizes the
+// fixed-width pane beside it; the two ends swap the pair, which is the only
+// thing a boundary between two fixed-width panes can do.
+function ResizeHandle({ onMouseDown, onSwap }: {
+  onMouseDown?: (e: React.MouseEvent) => void;
+  onSwap: () => void;
+}) {
+  if (!onMouseDown) {
+    return (
+      <button
+        type="button"
+        onClick={onSwap}
+        aria-label="Swap panels"
+        title="Swap panels"
+        className="group relative z-10 flex w-2 shrink-0 cursor-pointer items-center justify-center bg-border transition-colors hover:bg-blue-400"
+      >
+        <span className="h-8 w-0.5 rounded-full bg-muted-foreground/20 group-hover:bg-white/70 transition-colors" />
+      </button>
+    );
+  }
   return (
-    <div
-      className="group relative z-10 flex w-1 shrink-0 cursor-col-resize items-center justify-center bg-border hover:bg-blue-400 active:bg-blue-500 transition-colors"
-      onMouseDown={onMouseDown}
-    >
-      <div className="h-8 w-0.5 rounded-full bg-muted-foreground/20 group-hover:bg-blue-400 transition-colors" />
+    <div className="group relative z-10 flex w-2 shrink-0 flex-col bg-border transition-colors">
+      <button
+        type="button"
+        onClick={onSwap}
+        aria-label="Swap panels"
+        title="Swap panels"
+        className="h-[20%] w-full cursor-pointer transition-colors hover:bg-blue-400"
+      />
+      <div
+        className="flex flex-1 cursor-col-resize items-center justify-center transition-colors hover:bg-blue-400 active:bg-blue-500"
+        onMouseDown={onMouseDown}
+      >
+        <span className="h-8 w-0.5 rounded-full bg-muted-foreground/20 group-hover:bg-blue-400 transition-colors" />
+      </div>
+      <button
+        type="button"
+        onClick={onSwap}
+        aria-label="Swap panels"
+        title="Swap panels"
+        className="h-[20%] w-full cursor-pointer transition-colors hover:bg-blue-400"
+      />
     </div>
   );
 }
@@ -571,19 +613,37 @@ function WorkspacePage({
   }, [anyStreaming, isActive, sandboxFetchTree, sandboxRefreshOpenTabs]);
 
   const [treeWidth, setTreeWidth] = useState(
-    () => initialState?.treeWidth ?? 320,
+    () => initialState?.treeWidth ?? DEFAULT_TREE_WIDTH,
   );
   const [chatWidth, setChatWidth] = useState(
-    () => initialState?.chatWidth ?? 640,
+    () => initialState?.chatWidth ?? DEFAULT_CHAT_WIDTH,
+  );
+  const [panelOrder, setPanelOrder] = usePanelOrder();
+  const swapPanels = useCallback((left: PanelId, right: PanelId) => {
+    setPanelOrder((current) => {
+      const li = current.indexOf(left);
+      const ri = current.indexOf(right);
+      if (li < 0 || ri < 0) return current;
+      const next = [...current];
+      [next[li], next[ri]] = [next[ri], next[li]];
+      return next;
+    });
+  }, [setPanelOrder]);
+  // `preview` has no close control, so it is always one of them.
+  const visiblePanels = useMemo(
+    () => panelOrder.filter((id) => (id === "tree" ? sandboxOpen : id === "chat" ? chatOpen : true)),
+    [panelOrder, sandboxOpen, chatOpen],
   );
   const [isResizing, setIsResizing] = useState(false);
   const dragging = useRef<"tree" | "chat" | null>(null);
   const dragStartX = useRef(0);
   const dragStartWidth = useRef(0);
+  const dragSign = useRef<1 | -1>(1);
 
-  const startDrag = useCallback((panel: "tree" | "chat") => (e: React.MouseEvent) => {
+  const startDrag = useCallback((panel: "tree" | "chat", sign: 1 | -1) => (e: React.MouseEvent) => {
     e.preventDefault();
     dragging.current = panel;
+    dragSign.current = sign;
     dragStartX.current = e.clientX;
     dragStartWidth.current = panel === "tree" ? treeWidth : chatWidth;
     setIsResizing(true);
@@ -592,11 +652,11 @@ function WorkspacePage({
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
       if (!dragging.current) return;
-      const delta = e.clientX - dragStartX.current;
+      const delta = (e.clientX - dragStartX.current) * dragSign.current;
       if (dragging.current === "tree") {
-        setTreeWidth(Math.max(150, Math.min(480, dragStartWidth.current + delta)));
+        setTreeWidth(clampPanelWidth("tree", dragStartWidth.current + delta));
       } else {
-        setChatWidth(Math.max(280, Math.min(720, dragStartWidth.current - delta)));
+        setChatWidth(clampPanelWidth("chat", dragStartWidth.current + delta));
       }
     };
     const onUp = () => {
@@ -1134,7 +1194,9 @@ function WorkspacePage({
         </div>
       </header>
 
-      {/* Main content area — three columns: file tree | preview | chat */}
+      {/* Main content area — three columns: file tree | preview | chat.
+          Panels keep a fixed DOM order and are arranged with CSS `order`:
+          reordering nodes would remount ChatTab and drop a live stream. */}
       <div
         className={cn("grid min-h-0 flex-1 overflow-hidden xl:flex", isResizing && "select-none")}
         style={{
@@ -1145,7 +1207,10 @@ function WorkspacePage({
 
         {/* Left: file tree */}
         {isActive && sandboxOpen && (
-          <div className="min-h-0 min-w-0 shrink-0 overflow-hidden xl:w-[var(--tree-width)]" style={{ "--tree-width": `${treeWidth}px` } as CSSProperties}>
+          <div
+            className="min-h-0 min-w-0 shrink-0 overflow-hidden xl:w-[var(--tree-width)] xl:[order:var(--panel-order)]"
+            style={{ "--tree-width": `${treeWidth}px`, "--panel-order": panelOrder.indexOf("tree") * 2 } as CSSProperties}
+          >
             <FileTreePanel
               tree={sandbox.tree}
               selectedPath={sandbox.activeTabPath}
@@ -1167,12 +1232,12 @@ function WorkspacePage({
           </div>
         )}
 
-        {/* Drag handle: tree ↔ preview */}
-        {isActive && sandboxOpen && <div className="hidden xl:flex"><ResizeHandle onMouseDown={startDrag("tree")} /></div>}
-
         {/* Middle: file preview with tabs — always shown; it is the pane the
             side panels make room for (e.g. the LaTeX editor + PDF). */}
-        <div className="min-h-0 flex-1 min-w-0 overflow-hidden">
+        <div
+          className="min-h-0 flex-1 min-w-0 overflow-hidden xl:[order:var(--panel-order)]"
+          style={{ "--panel-order": panelOrder.indexOf("preview") * 2 } as CSSProperties}
+        >
             <FilePreviewPanel
               projectId={projectId}
               isActive={isActive}
@@ -1220,17 +1285,17 @@ function WorkspacePage({
             />
         </div>
 
-        {/* Drag handle: preview ↔ chat */}
-        {isActive && chatOpen && <div className="hidden xl:flex"><ResizeHandle onMouseDown={startDrag("chat")} /></div>}
-
         {/* Right: chat / workflows. Kept mounted (hidden via CSS when
             collapsed) so background chat streams keep running. */}
         <div
           className={cn(
-            "col-span-full flex min-h-0 min-w-0 flex-col border-l overflow-hidden shrink-0 xl:w-[var(--chat-width)]",
+            "col-span-full flex min-h-0 min-w-0 flex-col overflow-hidden shrink-0 xl:w-[var(--chat-width)] xl:[order:var(--panel-order)]",
             !chatOpen && "hidden",
           )}
-          style={{ "--chat-width": `${chatWidth}px` } as CSSProperties}
+          style={{
+            "--chat-width": `${chatWidth}px`,
+            "--panel-order": panelOrder.indexOf("chat") * 2,
+          } as CSSProperties}
         >
 
           <ChatTabsBar
@@ -1296,9 +1361,37 @@ function WorkspacePage({
           )}
         </div>
 
+        {/* Boundaries. Each sits between two visible panes, so its order is
+            the left neighbour's + 1. Mounted last in the DOM so React never
+            has to move a panel to place one. */}
+        {isActive && visiblePanels.slice(0, -1).map((left, index) => {
+          const right = visiblePanels[index + 1];
+          const target = handleTarget(left, right);
+          return (
+            <div
+              key={`${left}-${right}`}
+              className="hidden xl:flex xl:[order:var(--panel-order)]"
+              style={{ "--panel-order": panelOrder.indexOf(left) * 2 + 1 } as CSSProperties}
+            >
+              <ResizeHandle
+                onMouseDown={target ? startDrag(target.panel, target.sign) : undefined}
+                onSwap={() => swapPanels(left, right)}
+              />
+            </div>
+          );
+        })}
+
       </div>
 
-      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} request={settingsRequest} />
+      <SettingsDialog
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+        request={settingsRequest}
+        panelWidths={{ tree: treeWidth, chat: chatWidth }}
+        onPanelWidthChange={(panel, value) =>
+          panel === "tree" ? setTreeWidth(value) : setChatWidth(value)
+        }
+      />
     </div>
   );
 }

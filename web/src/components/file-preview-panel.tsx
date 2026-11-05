@@ -1889,7 +1889,7 @@ export function FilePreviewPanel({
   );
 
   return (
-    <div className="flex h-full flex-col border-r">
+    <div className="flex h-full flex-col">
       {/* Tab bar */}
       <TabBar
         tabs={tabs}

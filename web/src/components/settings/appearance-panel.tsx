@@ -1,22 +1,52 @@
 "use client";
 
-import { MonitorIcon, MoonIcon, SunIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronUpIcon, MonitorIcon, MoonIcon, SunIcon } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { LOCALES, useLocale } from "@/lib/i18n/locale";
 import {
+  PANEL_WIDTH_RANGE,
+  clampPanelWidth,
+  usePanelOrder,
+  type PanelId,
+} from "@/lib/panel-order";
+import {
   DEFAULT_SHELL_SETTINGS,
   getShellSettings,
   putShellSettings,
   type CloseAction,
 } from "@/lib/shell-settings";
-import { SettingsError, SettingsHeader } from "./primitives";
+import { SettingsCard, SettingsError, SettingsHeader } from "./primitives";
 
-export function AppearancePanel() {
+const PANEL_LABELS: Record<PanelId, string> = {
+  tree: "Files",
+  preview: "Preview",
+  chat: "Chat",
+};
+
+export function AppearancePanel({
+  panelWidths,
+  onPanelWidthChange,
+}: {
+  panelWidths?: { tree: number; chat: number };
+  onPanelWidthChange?: (panel: "tree" | "chat", value: number) => void;
+} = {}) {
   const { theme, setTheme } = useTheme();
   const [locale, setLocale] = useLocale();
+  const [panelOrder, setPanelOrder] = usePanelOrder();
+
+  const movePanel = useCallback((id: PanelId, direction: -1 | 1) => {
+    setPanelOrder((current) => {
+      const index = current.indexOf(id);
+      const target = index + direction;
+      if (index < 0 || target < 0 || target >= current.length) return current;
+      const next = [...current];
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
+  }, [setPanelOrder]);
 
   const options: { value: string; label: string; icon: typeof SunIcon }[] = [
     { value: "light", label: "Light", icon: SunIcon },
@@ -229,6 +259,82 @@ export function AppearancePanel() {
         </div>
         {shellError ? <SettingsError>{shellError}</SettingsError> : null}
       </div>
+
+      <SettingsCard
+        id="panel-order"
+        title="Panel order"
+        description="Left to right on wide windows. The side panels can also be swapped by clicking the ends of the divider between them. On narrow windows the layout stays fixed."
+      >
+        <ol className="flex flex-col gap-1">
+          {panelOrder.map((id, index) => (
+            <li key={id} className="flex items-center gap-2 rounded-lg border px-3 py-2">
+              <span className="flex-1 text-xs font-medium text-foreground">{PANEL_LABELS[id]}</span>
+              <Button
+                variant="outline"
+                size="sm"
+                className="size-7 p-0"
+                aria-label={`Move ${PANEL_LABELS[id]} left`}
+                title={`Move ${PANEL_LABELS[id]} left`}
+                disabled={index === 0}
+                onClick={() => movePanel(id, -1)}
+              >
+                <ChevronUpIcon className="size-3.5 rotate-[-90deg]" />
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="size-7 p-0"
+                aria-label={`Move ${PANEL_LABELS[id]} right`}
+                title={`Move ${PANEL_LABELS[id]} right`}
+                disabled={index === panelOrder.length - 1}
+                onClick={() => movePanel(id, 1)}
+              >
+                <ChevronDownIcon className="size-3.5 rotate-[-90deg]" />
+              </Button>
+            </li>
+          ))}
+        </ol>
+        <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+          The preview always takes the leftover width, so it stays the widest
+          pane wherever it sits.
+        </p>
+      </SettingsCard>
+
+      {panelWidths && onPanelWidthChange ? (
+        <SettingsCard
+          id="panel-widths"
+          title="Panel widths"
+          description="Saved per project. A boundary between two fixed-width panels cannot be dragged — the preview has to be on one side of it — so set those widths here."
+        >
+          <div className="flex flex-col gap-2">
+            {(["tree", "chat"] as const).map((panel) => {
+              const range = PANEL_WIDTH_RANGE[panel];
+              return (
+                <label key={panel} className="flex items-center gap-3 text-xs">
+                  <span className="w-16 shrink-0 text-muted-foreground">{PANEL_LABELS[panel]}</span>
+                  <input
+                    type="number"
+                    className="w-24 rounded border bg-background px-2 py-1 tabular-nums"
+                    min={range.min}
+                    max={range.max}
+                    step={10}
+                    value={panelWidths[panel]}
+                    onChange={(e) => {
+                      const value = Number(e.target.value);
+                      if (Number.isFinite(value)) {
+                        onPanelWidthChange(panel, clampPanelWidth(panel, value));
+                      }
+                    }}
+                  />
+                  <span className="text-[11px] text-muted-foreground">
+                    {range.min}–{range.max} px
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+        </SettingsCard>
+      ) : null}
     </div>
   );
 }
