@@ -1,123 +1,98 @@
 /**
  * What the packaging filter is allowed to drop.
  *
- * The failure this guards against is silent: pi-subagents stores its prompt
- * templates, skill trees and builtin agent definitions as `.md`, and those
- * directories contain nothing else. A blanket "markdown is documentation" rule
- * empties them, the build still succeeds, and the damage only shows up at
- * runtime — `/prompts` and `/skills` answer 500, and the notebook, Modal and
- * PDF-annotation bridges quietly stop extending builtin specialists' tool
- * lists because there is no frontmatter left to read.
+ * Markdown is deliberately never dropped. pi-subagents stores its prompt
+ * templates, skill trees and builtin agent definitions as `.md`, and a blanket
+ * "markdown is documentation" rule emptied those directories — the build still
+ * succeeded, and the damage only showed up at runtime: `/prompts` and `/skills`
+ * answered 500, and the notebook, Modal and PDF-annotation bridges quietly
+ * stopped extending builtin specialists' tool lists because there was no
+ * frontmatter left to read. That cost 9.3 MB uncompressed to avoid.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import {
-  DEPENDENCY_RESOURCES,
-  declaredResourceDirs,
-  omitFromBundle,
-} from "../scripts/bundle-filter.mjs";
+import { omitFromBundle } from "../scripts/bundle-filter.mjs";
 
 const desktop = path.resolve(import.meta.dirname, "..");
 const server = path.resolve(desktop, "..", "server");
 
-function packageDir(name) {
-  // Not `require.resolve`: pi-subagents' `exports` map does not expose
-  // `./package.json`, so resolution throws even when the package is installed.
-  const candidate = path.join(server, "node_modules", ...name.split("/"));
-  return fs.existsSync(path.join(candidate, "package.json")) ? candidate : null;
-}
+test("keeps every file of the installed pi-subagents package", () => {
+  // The real package, not a fixture: this is the one whose resources the app
+  // reads at runtime, and the check should fail if the rule ever regains a
+  // markdown exemption that catches it.
+  const pkg = path.join(server, "node_modules", "pi-subagents");
+  if (!fs.existsSync(path.join(pkg, "package.json"))) return; // not installed
 
-test("markdown is documentation unless a package declares it as content", () => {
-  const scratch = fs.mkdtempSync(path.join(desktop, ".tmp-filter-"));
+  const dropped = [];
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const abs = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (!omitFromBundle(abs)) walk(abs);
+        continue;
+      }
+      // Source maps in the package genuinely are debugger-only; everything
+      // else it ships must reach the payload.
+      if (/\.map$/.test(entry.name)) continue;
+      if (omitFromBundle(abs)) dropped.push(path.relative(pkg, abs));
+    }
+  };
+  walk(pkg);
+
+  assert.deepEqual(dropped, [], "pi-subagents files missing from the payload");
+  // Non-vacuous: the package really does ship the resources in question.
+  for (const rel of ["prompts", "agents", "skills"]) {
+    assert.ok(fs.existsSync(path.join(pkg, rel)), `pi-subagents/${rel} missing from the checkout`);
+  }
+});
+
+test("never drops markdown, wherever it lives", () => {
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "kady-filter-"));
   try {
     const pkg = path.join(scratch, "pkg");
-    fs.mkdirSync(path.join(pkg, "prompts"), { recursive: true });
-    fs.mkdirSync(path.join(pkg, "docs"), { recursive: true });
-    fs.writeFileSync(path.join(pkg, "package.json"), JSON.stringify({ pi: { prompts: ["./prompts"] } }));
-    const prompt = path.join(pkg, "prompts", "review.md");
-    fs.writeFileSync(prompt, "# review");
-    const doc = path.join(pkg, "docs", "guide.md");
-    fs.writeFileSync(doc, "# guide");
-
-    const dirs = declaredResourceDirs(pkg, "pkg");
-    assert.equal(omitFromBundle(prompt, dirs), false, "a declared prompt template is content");
-    assert.equal(omitFromBundle(doc, dirs), true, "undeclared markdown is still dropped");
+    for (const rel of [
+      "README.md",
+      "CHANGELOG.md",
+      "LICENSE.md",
+      "docs/guide.md",
+      "prompts/review.md",
+      "agents/reviewer.md",
+      "skills/pi-subagents/SKILL.md",
+      "notes.markdown",
+    ]) {
+      const file = path.join(pkg, rel);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, "# content\n");
+      assert.equal(omitFromBundle(file), false, `${rel} must survive packaging`);
+    }
   } finally {
     fs.rmSync(scratch, { recursive: true, force: true });
   }
 });
 
-test("licences survive even inside a declared resource directory", () => {
-  const scratch = fs.mkdtempSync(path.join(desktop, ".tmp-filter-"));
+test("still drops source maps, test files and __tests__ directories", () => {
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "kady-filter-"));
   try {
     const pkg = path.join(scratch, "pkg");
-    fs.mkdirSync(path.join(pkg, "skills"), { recursive: true });
-    fs.writeFileSync(path.join(pkg, "package.json"), JSON.stringify({ pi: { skills: "./skills" } }));
-    const licence = path.join(pkg, "skills", "LICENSE.md");
-    fs.writeFileSync(licence, "MIT");
-    assert.equal(omitFromBundle(licence, declaredResourceDirs(pkg, "pkg")), false);
-  } finally {
-    fs.rmSync(scratch, { recursive: true, force: true });
-  }
-});
+    fs.mkdirSync(path.join(pkg, "__tests__"), { recursive: true });
+    fs.mkdirSync(path.join(pkg, "src"), { recursive: true });
+    for (const rel of ["index.js.map", "src/thing.test.ts", "src/thing.spec.mjs"]) {
+      const file = path.join(pkg, rel);
+      fs.writeFileSync(file, "x");
+      assert.equal(omitFromBundle(file), true, `${rel} should be dropped`);
+    }
+    assert.equal(omitFromBundle(path.join(pkg, "__tests__")), true);
 
-test("Kady's own list covers the directory pi-subagents does not declare", () => {
-  // `agents/` is absent from the package's `pi` field: it is Kady that reads
-  // those files, through `listBuiltinAgents` and the three tool bridges.
-  assert.ok(DEPENDENCY_RESOURCES["pi-subagents"].includes("agents"));
-});
-
-test("the installed pi-subagents keeps its prompts, skills and builtin agents", { skip: !packageDir("pi-subagents") }, () => {
-  // The real package, not a fixture. This is the regression that shipped: an
-  // empty `prompts/` made `seedSubagentResources` throw ENOENT into the
-  // `/prompts` and `/skills` routes.
-  const dir = packageDir("pi-subagents");
-  const dirs = declaredResourceDirs(dir, "pi-subagents");
-
-  const kept = (rel) => {
-    const full = path.join(dir, rel);
-    assert.ok(fs.existsSync(full), `fixture assumption broken: ${rel} is missing from the installed package`);
-    return !omitFromBundle(full, dirs);
-  };
-
-  const sample = {
-    "prompts": ["council.md", "review-loop.md"],
-    "agents": ["reviewer.md", "researcher.md"],
-    "skills": ["pi-subagents/SKILL.md", "pi-subagents/references/prompting-and-roles.md"],
-  };
-  for (const [kind, files] of Object.entries(sample)) {
-    for (const file of files) assert.ok(kept(`${kind}/${file}`), `${kind}/${file} would be dropped from the payload`);
-  }
-
-  // Documentation outside those directories is still trimmed.
-  for (const rel of ["README.md", "CHANGELOG.md", "docs/agents.md"]) {
-    if (!fs.existsSync(path.join(dir, rel))) continue;
-    assert.equal(omitFromBundle(path.join(dir, rel), dirs), true, `${rel} should still be dropped`);
-  }
-});
-
-test("a nested copy of a package is judged by its own manifest", () => {
-  // `defuddle/node_modules/linkedom` is a different package from `linkedom`
-  // at the top level; resource directories must be resolved per package root,
-  // which is why the build passes `from` with each package's own key.
-  const scratch = fs.mkdtempSync(path.join(desktop, ".tmp-filter-"));
-  try {
-    const outer = path.join(scratch, "outer");
-    const inner = path.join(outer, "node_modules", "inner");
-    fs.mkdirSync(inner, { recursive: true });
-    fs.writeFileSync(path.join(outer, "package.json"), "{}");
-    fs.writeFileSync(path.join(inner, "package.json"), JSON.stringify({ pi: { skills: "./skills" } }));
-    fs.mkdirSync(path.join(inner, "skills"));
-    const skill = path.join(inner, "skills", "SKILL.md");
-    fs.writeFileSync(skill, "# skill");
-
-    // The outer package declares nothing, so the same file judged as part of
-    // the outer tree is plain markdown.
-    assert.equal(omitFromBundle(skill, declaredResourceDirs(outer, "outer")), true);
-    assert.equal(omitFromBundle(skill, declaredResourceDirs(inner, "inner")), false);
+    // A package's own top-level `test/` is kept: some older packages keep
+    // fixtures there that runtime code reads.
+    const runtimeFixture = path.join(pkg, "test", "fixture.json");
+    fs.mkdirSync(path.dirname(runtimeFixture), { recursive: true });
+    fs.writeFileSync(runtimeFixture, "{}");
+    assert.equal(omitFromBundle(runtimeFixture), false);
   } finally {
     fs.rmSync(scratch, { recursive: true, force: true });
   }

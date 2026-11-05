@@ -17,7 +17,7 @@ import { fileURLToPath } from "node:url";
 
 import { build as esbuild } from "esbuild";
 import { copyRuntimeTree } from "./runtime-files.mjs";
-import { declaredResourceDirs, omitFromBundle } from "./bundle-filter.mjs";
+import { omitFromBundle } from "./bundle-filter.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const desktopRoot = path.resolve(here, "..");
@@ -274,15 +274,11 @@ async function buildBackend() {
     if (!fs.existsSync(path.join(from, "package.json"))) continue;
     const to = path.join(stagedNm, rel);
     fs.mkdirSync(path.dirname(to), { recursive: true });
-    // Which markdown in this package is content rather than documentation.
-    // Nested packages keep their own root below, so a nested copy of the same
-    // name is judged against its own manifest.
-    const resourceDirs = declaredResourceDirs(from, rel.split("/node_modules/").pop());
     copyDir(from, to, {
       filter: (src) => {
         if (src === from) return true;
         try {
-          return !omitFromBundle(src, resourceDirs);
+          return !omitFromBundle(src);
         } catch {
           // A broken symlink or a file vanishing mid-copy: keep whatever comes
           // next rather than failing the build over one weird package.
@@ -293,6 +289,8 @@ async function buildBackend() {
     copied += 1;
   }
   console.log(`  staged ${copied} production packages`);
+
+  verifyResourceDirs(stagedNm);
 
   // The backend prepends node_modules/.bin to PATH for the tools it shells
   // out to; recreate the shims from each package's own `bin` field.
@@ -331,6 +329,39 @@ async function buildBackend() {
     path.join(serverOut, "package.json"),
     JSON.stringify({ name: "kady-server", version: pkg.version, type: "module", private: true }, null, 2),
   );
+}
+
+/**
+ * Packages whose resource directories must survive staging, and which.
+ *
+ * Markdown is no longer filtered, so these should always be present; the check
+ * exists to catch a *different* regression — a future filter rule, a `.md`
+ * exclusion added elsewhere, or a package layout change that moves resources
+ * out from under the manifest. Failing the build is the point: the damage this
+ * guards is otherwise invisible until a user opens the affected panel.
+ */
+const REQUIRED_RESOURCE_DIRS = {
+  "pi-subagents": ["agents", "prompts", "skills"],
+};
+
+function verifyResourceDirs(stagedNm) {
+  // Any entry counts, file or directory: `prompts` and `agents` hold `.md`
+  // files while `skills` holds one directory per skill, and what matters is
+  // that the directory is not empty.
+  const problems = [];
+  for (const [pkg, dirs] of Object.entries(REQUIRED_RESOURCE_DIRS)) {
+    for (const dir of dirs) {
+      const abs = path.join(stagedNm, pkg, dir);
+      const entries = fs.existsSync(abs) ? fs.readdirSync(abs) : [];
+      if (entries.length === 0) problems.push(`${pkg}/${dir}`);
+    }
+  }
+  if (problems.length) {
+    throw new Error(
+      `Packaged payload is missing runtime content: ${problems.join(", ")}. ` +
+        "The app would start but its prompt, skill and specialist panels would fail.",
+    );
+  }
 }
 
 function buildFrontend() {
