@@ -35,7 +35,7 @@ Artifacts land in `dist/` at the repository root (`directories.output` is `../di
 > npx electron-builder --config electron-builder.json --win
 > ```
 
-`npm run dist` runs three steps: compile the payload (`build-runtime.mjs`), download and trim PortableGit and uv (`fetch-externals.mjs`), then package with electron-builder.
+`npm run dist` chains six steps: build the frontend (`build-web.mjs`), generate the icon (`make-icon.mjs`), compile the payload (`build-runtime.mjs`), smoke-test that the packaged backend can create a session (`verify-runtime-session.mjs`), download and trim PortableGit and uv (`fetch-externals.mjs`), and verify the bundle with only itself on PATH (`verify-externals.mjs`) — then hand off to electron-builder.
 
 ### Development mode (from source)
 
@@ -122,6 +122,8 @@ macOS has **not** had the same runtime verification depth as the Windows table: 
 | `KADY_MODELS_CATALOGUE` | Path to the model catalogue JSON |
 | `KADY_FRONTEND_PORT` | Frontend origin port the backend trusts (CORS) |
 | `KADY_PORT` | Backend listen port |
+| `KADY_PYPI_INDEX` | Package index for `uv sync` (also settable in Settings → Services). Defaults to PyPI |
+| `KADY_SKILLS_AUTO_SYNC` | Set to `0` to skip the launch and daily skill catalogue sync. Useful offline or on metered connections |
 | `HTTPS_PROXY` / `HTTP_PROXY` | Outbound proxy, read at startup only — restart after changing |
 
 ## Closing the window
@@ -146,11 +148,11 @@ Design notes, known gaps and how to add a translation are in [web/docs/i18n.md](
 
 ## Not yet done
 
-- **Shell tests on Windows**: `desktop/test/` only runs in `macos-desktop.yml`; `tests.yml` does not cover `desktop/`. Windows is the primary release platform, yet the shell has no test coverage there.
-- **Code signing**: Windows has `signExecutable: false` and shows a SmartScreen warning; macOS is ad-hoc signed and not notarized, so a downloaded copy needs one approval under Privacy & Security. Neither establishes a verified publisher.
+- **Shell test coverage gap**: the `desktop` job in `tests.yml` runs 9 of the 11 files in `desktop/test/` on Windows and Linux. The two missing: `lifecycle.test.mjs` (service start/stop, process-tree termination) runs only via `npm test` in the macOS workflow, and skips itself on Windows — Windows teardown goes through `taskkill /T /F`, which is not what its POSIX assertions describe; `macos.test.mjs` is macOS-only. One case in `runtime-files.test.mjs` skips on Windows because it depends on symlinks.
+- **Code signing**: neither platform has a certificate. Windows shows a SmartScreen warning and a downloaded macOS copy needs one approval under Privacy & Security; neither establishes a verified publisher. The configuration is ready: electron-builder skips signing when `WIN_CSC_LINK` is absent, so adding the certificate variables to CI signs the next build with no config change. Do not add `signExecutable: false` back — it is a hard switch that keeps signing off even with a certificate configured.
 - **Auto-update**: not implemented. macOS's ad-hoc signature would fail Squirrel.Mac's update check outright, so signing has to come first.
-- **First-launch Python environment**: `uv sync` builds two venvs (sandbox + preview helper); it takes several minutes and needs network
-- **Skill library network dependency**: the `skills` CLI re-clones the upstream repo (460 MB) on every sync, and reports `SSL/TLS handshake` or `invalid index-pack output` when the network is unstable. System Git fails the same way with the same command, so this is not the bundled build's fault. Fetched caches land in `%TEMP%/kady-desk-skills/`, but the CLI does not reuse them
+- **First-launch Python environment**: `uv sync` builds two venvs (sandbox + preview helper); it takes several minutes and needs network. A cold install of the preview helper measured 553 MB; the default PyPI took 17 minutes on a constrained network versus 26 seconds through a regional mirror.
+- **Skill library network dependency**: the first run downloads the 460 MB upstream catalogue, and an unstable link reports `SSL/TLS handshake` or `invalid index-pack output` — system Git fails the same way with the same command, so this is not the bundled build's fault. The whole download has a two-minute ceiling (`CATALOGUE_DEADLINE_MS`); concurrent callers share one download, the staging trees are refcounted, and `sandbox/init` waits only for the local part while remote seeding continues in the background. Staging lives in `~/.kady/skills-cache/` (override with `KADY_SKILLS_CACHE_DIR`), keyed by source and a hash; each sync clears its directory and re-downloads rather than reusing it. A failed download does not block use, and Settings → Skills retries it.
 - **Linux**: configuration remains unverified and is not in CI.
 
 ## License

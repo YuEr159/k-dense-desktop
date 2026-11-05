@@ -35,7 +35,7 @@ npm run dist:mac    # macOS .app + DMG + ZIP（ad-hoc 签名）
 > npx electron-builder --config electron-builder.json --win
 > ```
 
-`npm run dist` 包含三步：编译载荷（`build-runtime.mjs`）、下载并裁剪平台二进制（`fetch-externals.mjs`）、electron-builder 打包。
+`npm run dist` 串起六步：构建前端（`build-web.mjs`）、生成图标（`make-icon.mjs`）、编译载荷（`build-runtime.mjs`）、冒烟验证打包后的后端能建会话（`verify-runtime-session.mjs`）、下载并裁剪平台二进制（`fetch-externals.mjs`）、隔离 PATH 验证捆绑二进制（`verify-externals.mjs`），最后交给 electron-builder 打包。
 
 ### 开发模式（源码）
 
@@ -217,16 +217,18 @@ macOS 侧**没有**做过与 Windows 表格同等深度的运行时验证：Inte
 | `KADY_MODELS_CATALOGUE` | 模型目录 JSON 路径 |
 | `KADY_FRONTEND_PORT` | 后端信任的前端来源端口（CORS） |
 | `KADY_PORT` | 后端监听端口 |
+| `KADY_PYPI_INDEX` | `uv sync` 用的包索引（Settings → Services 亦可设）。默认 PyPI |
+| `KADY_SKILLS_AUTO_SYNC` | 设为 `0` 关闭启动时和每日的技能目录同步。离线或计费网络下有用 |
 | `HTTPS_PROXY` / `HTTP_PROXY` | 出站代理，只在启动时读取，改完需重启 |
 
 ## 尚未完成
 
-- **Windows 上的壳测试**：`desktop/test/` 只在 `macos-desktop.yml` 里跑，`tests.yml` 不覆盖 `desktop/`。Windows 是主发布平台，壳代码却零测试覆盖。
-- **代码签名**：Windows `signExecutable: false`，会弹 SmartScreen；macOS 是 ad-hoc 签名、未公证，需要用户在「隐私与安全性」里批准一次。两者都不构成「已验证发布者」。
+- **壳测试的覆盖缺口**：`tests.yml` 的 `desktop` job 在 Windows 和 Linux 上跑 9 个测试文件，`desktop/test/` 共 11 个。缺的两个：`lifecycle.test.mjs`（服务启停、进程树终止）只在 macOS workflow 的 `npm test` 里跑，Windows 上它会自己 skip——Windows 的进程树清理走 `taskkill /T /F`，与它断言的 POSIX 行为不同；`macos.test.mjs` 只在 macOS 上跑。`runtime-files.test.mjs` 的一条在 Windows 上 skip，因为它依赖符号链接。
+- **代码签名**：Windows 与 macOS 都没有证书，会弹 SmartScreen / 需在「隐私与安全性」里批准一次，两者都不构成「已验证发布者」。配置本身已就绪：electron-builder 没有 `WIN_CSC_LINK` 时自然跳过签名，在 CI 里加上证书变量，下一次构建就会自动签名。不要加 `signExecutable: false`——它是硬开关，会让配了证书也照样不签。
 - **自动更新**：没有实现。macOS 的 ad-hoc 签名会直接卡死 Squirrel.Mac 的更新校验，所以真要做得先解决签名。
-- **首次启动的 Python 环境**：`uv sync` 会构建两个 venv（沙箱 + 预览 helper），耗时数分钟且需联网
-- **技能库的网络依赖**：`skills` CLI 每次同步都重新 `git clone` 上游仓库（460 MB），网络不稳时会报 `SSL/TLS handshake` 或 `invalid index-pack output`。系统 Git 用同样命令也会失败，不是捆绑版的问题。已抓取过的缓存落在 `%TEMP%/kady-desk-skills/`，但 CLI 不复用它
-- **Linux**：配置已写，未验证，也未进 CI
+- **首次启动的 Python 环境**：`uv sync` 会构建两个 venv（沙箱 + 预览 helper），耗时数分钟且需联网。预览 helper 的冷安装实测 553 MB；默认 PyPI 在受限网络下 17 分钟，换区域镜像 26 秒。
+- **技能库的网络依赖**：首次需下载 460 MB 的上游技能目录，网络不稳时会报 `SSL/TLS handshake` 或 `invalid index-pack output`——系统 Git 用同样命令也会失败，不是捆绑版的问题。整次下载有 2 分钟总上限（`CATALOGUE_DEADLINE_MS`），并发调用共享同一次下载、暂存树按引用计数清理，`sandbox/init` 只等本地部分、远程播种在后台。暂存目录在 `~/.kady/skills-cache/`（`KADY_SKILLS_CACHE_DIR` 可改），按源名加哈希分子目录；每次同步会先清空再下，不复用旧内容。下载失败不阻塞使用，Settings → Skills 可重试。
+- **Linux**：配置已写，未验证，也未进 CI。
 
 ## 许可
 
