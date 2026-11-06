@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import {
   DEFAULT_PANEL_ORDER,
+  PANEL_PRESETS,
   clampPanelWidth,
   clampTranscriptWidth,
   fitPanelWidths,
   handleTarget,
+  matchPanelPreset,
   normalizePanelOrder,
   readPanelOrder,
   splitPairWidths,
@@ -77,6 +79,34 @@ describe("panel order storage", () => {
     };
     expect(readPanelOrder(storage)).toEqual(DEFAULT_PANEL_ORDER);
     expect(() => writePanelOrder(storage, ["chat", "preview", "tree"])).not.toThrow();
+  });
+});
+
+describe("matchPanelPreset", () => {
+  it("recognises each shipped preset", () => {
+    for (const preset of PANEL_PRESETS) {
+      expect(matchPanelPreset([...preset.order])).toBe(preset.id);
+    }
+  });
+
+  it("reports an arrangement the presets do not cover as custom", () => {
+    expect(matchPanelPreset(["preview", "chat", "tree"])).toBeNull();
+  });
+
+  it("does not match on a prefix", () => {
+    expect(matchPanelPreset(["tree", "preview"])).toBeNull();
+  });
+
+  // Two presets landing on the same order would make one of them unreachable.
+  it("ships no duplicate arrangements", () => {
+    const seen = PANEL_PRESETS.map((preset) => preset.order.join("|"));
+    expect(new Set(seen).size).toBe(seen.length);
+  });
+
+  it("covers every pane exactly once per preset", () => {
+    for (const preset of PANEL_PRESETS) {
+      expect([...preset.order].sort()).toEqual([...DEFAULT_PANEL_ORDER].sort());
+    }
   });
 });
 

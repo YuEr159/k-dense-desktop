@@ -12,16 +12,26 @@ import {
 import { useTheme } from "next-themes";
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { LOCALES, useLocale } from "@/lib/i18n/locale";
 import {
   PANEL_IDS,
+  PANEL_PRESETS,
   PANEL_WIDTH_RANGE,
   TRANSCRIPT_WIDTH_RANGE,
   clampPanelWidth,
   clampTranscriptWidth,
+  matchPanelPreset,
   usePanelOrder,
   type PanelId,
+  type PanelPresetId,
 } from "@/lib/panel-order";
 import {
   DEFAULT_SHELL_SETTINGS,
@@ -36,6 +46,15 @@ const PANEL_LABELS: Record<PanelId, string> = {
   preview: "Preview",
   chat: "Chat",
 };
+
+const PRESET_LABELS: Record<PanelPresetId, string> = {
+  default: "Files, preview, chat",
+  "chat-first": "Chats first",
+  "preview-last": "Files, chat, then preview",
+};
+
+/** Select values cannot be empty, and a preset id may never collide with it. */
+const CUSTOM_VALUE = "custom";
 
 export function AppearancePanel({
   panelWidths,
@@ -56,6 +75,7 @@ export function AppearancePanel({
   const { theme, setTheme } = useTheme();
   const [locale, setLocale] = useLocale();
   const [panelOrder, setPanelOrder] = usePanelOrder();
+  const activePreset = matchPanelPreset(panelOrder);
 
   const movePanel = useCallback((id: PanelId, direction: -1 | 1) => {
     setPanelOrder((current) => {
@@ -285,6 +305,37 @@ export function AppearancePanel({
         title="Panel order"
         description="Left to right on wide windows. Toggle a pane's eye to collapse it. On narrow windows the layout stays fixed."
       >
+        <div className="mb-3 flex flex-col gap-1.5">
+          <label htmlFor="panel-order-preset" className="text-xs text-muted-foreground">
+            Start from a preset
+          </label>
+          <Select
+            value={activePreset ?? CUSTOM_VALUE}
+            onValueChange={(value) => {
+              if (value === CUSTOM_VALUE) return;
+              const preset = PANEL_PRESETS.find((candidate) => candidate.id === value);
+              if (preset) setPanelOrder([...preset.order]);
+            }}
+          >
+            <SelectTrigger id="panel-order-preset" size="sm" className="w-full text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {PANEL_PRESETS.map((preset) => (
+                <SelectItem key={preset.id} value={preset.id}>
+                  {PRESET_LABELS[preset.id]}
+                </SelectItem>
+              ))}
+              {/* Only ever shown as the current value: picking it would do
+                  nothing, and a "custom" you can select is a lie. */}
+              {activePreset === null ? (
+                <SelectItem value={CUSTOM_VALUE} disabled>
+                  Custom
+                </SelectItem>
+              ) : null}
+            </SelectContent>
+          </Select>
+        </div>
         <ol className="flex flex-col gap-1">
           {/* Rows stay in a fixed order — sorted by the pane's own identity, not
               by its position — so moving a pane never makes the row you just

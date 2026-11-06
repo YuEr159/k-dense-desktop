@@ -19,6 +19,32 @@ export const PANEL_ORDER_KEY = "kady:panel-order";
 /** Same-tab notification; `storage` only fires in other tabs. */
 export const PANEL_ORDER_CHANGED_EVENT = "kady:panel-order-changed";
 
+/**
+ * Ready-made arrangements for the picker at the top of Panel order.
+ *
+ * The list is short on purpose: every permutation is still reachable with the
+ * per-pane arrows, and these three are the ones that read as a way of working
+ * rather than as a position. The ids are compared against a stored order, so
+ * they must stay stable — renaming one would quietly make a saved preset read
+ * as custom.
+ */
+export const PANEL_PRESETS = [
+  { id: "default", order: ["tree", "preview", "chat"] },
+  { id: "chat-first", order: ["chat", "preview", "tree"] },
+  { id: "preview-last", order: ["tree", "chat", "preview"] },
+] as const satisfies readonly { id: string; order: readonly PanelId[] }[];
+
+export type PanelPresetId = (typeof PANEL_PRESETS)[number]["id"];
+
+/** Which preset `order` is exactly, or null for an arrangement made by hand. */
+export function matchPanelPreset(order: readonly PanelId[]): PanelPresetId | null {
+  for (const preset of PANEL_PRESETS) {
+    if (preset.order.length !== order.length) continue;
+    if (preset.order.every((id, index) => id === order[index])) return preset.id;
+  }
+  return null;
+}
+
 const PANEL_ORDER_SET = new Set<string>(PANEL_IDS);
 
 /**
