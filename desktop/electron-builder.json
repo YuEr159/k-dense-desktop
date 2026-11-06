@@ -62,6 +62,7 @@
     "differentialPackage": false,
     "deleteAppDataOnUninstall": false,
     "runAfterFinish": true,
+    "include": "resources/installer.nsh",
     "artifactName": "Kady-${version}-${arch}-Setup.${ext}"
   },
   "mac": {
