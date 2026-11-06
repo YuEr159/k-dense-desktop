@@ -355,7 +355,7 @@ export function AppearancePanel({
         <SettingsCard
           id="transcript-width"
           title="Chat transcript width"
-          description="Maximum width of the transcript and composer columns. Saved per project."
+          description="How wide the message list and the input box may grow; both stay centred in the chat pane. Saved per project."
         >
           <label className="flex flex-col gap-1 text-xs">
             <span className="flex items-baseline justify-between">
