@@ -369,7 +369,7 @@ export function AppearancePanel({
               max={TRANSCRIPT_WIDTH_RANGE.max}
               step={10}
               value={transcriptWidth}
-              aria-label="Chat transcript width"
+              aria-label="Message column width"
               onChange={(e) =>
                 onTranscriptWidthChange(clampTranscriptWidth(Number(e.target.value)))
               }

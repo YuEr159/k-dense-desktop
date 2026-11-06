@@ -106,7 +106,7 @@ describe("AppearancePanel panel layout", () => {
     expect(document.getElementById("transcript-width")).toBeNull();
 
     rerender(<AppearancePanel transcriptWidth={768} onTranscriptWidthChange={onChange} />);
-    const slider = screen.getByRole("slider", { name: "Chat transcript width" });
+    const slider = screen.getByRole("slider", { name: "Message column width" });
     expect(slider).toHaveValue("768");
     expect(slider).toHaveAttribute("max", "1280");
 
