@@ -120,6 +120,27 @@ const isOpenAICompatible = (m: Model) =>
 const isLocal = (m: Model) => isOllama(m) || isOpenAICompatible(m);
 const LOCAL_GROUP_IDS = new Set(["ollama", "openai-compatible"]);
 
+/** Which picker section a model is listed under. */
+function sectionOf(m: Model): { id: string; label: string } {
+  const id = m.isFusion
+    ? "fusion"
+    : m.sourceId ??
+      (isOllama(m)
+        ? "ollama"
+        : isOpenAICompatible(m)
+          ? "openai-compatible"
+          : "openrouter");
+  const label = m.isFusion
+    ? "OpenRouter Fusion"
+    : m.sourceLabel ??
+      (isOllama(m)
+        ? "Local (Ollama)"
+        : isOpenAICompatible(m)
+          ? "Local (OpenAI-compatible)"
+          : "OpenRouter");
+  return { id, label };
+}
+
 function TierDot({ tier, isFusion }: { tier: string; isFusion?: boolean }) {
   if (isFusion) {
     return <span className={cn("inline-block size-1.5 rounded-full shrink-0", FUSION_DOT)} />;
@@ -159,18 +180,23 @@ export function ModelPickerList({
   onNavigate,
 }: ModelPickerListProps) {
   const [search, setSearch] = useState("");
-  // Which source sections the user folded away. All open by default: the
-  // list is long, but a picker that opens entirely collapsed makes the first
-  // choice a two-step one.
-  const [collapsedGroups, setCollapsedGroups] = useState<ReadonlySet<string>>(() => new Set());
-  const toggleGroup = (id: string) => {
-    setCollapsedGroups((current) => {
-      const next = new Set(current);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+  // Sections the user folded or unfolded by hand.
+  //
+  // The default view shows only where the user already is — the section
+  // holding the current pick — because a 190-model list is otherwise a wall
+  // of text with the choice buried in it. Once a header is clicked the user's
+  // own answer wins, so the selected section can still be folded by hand.
+  const [toggledGroups, setToggledGroups] = useState<ReadonlyMap<string, boolean>>(
+    () => new Map(),
+  );
+  const setGroupOpen = (id: string, open: boolean) => {
+    setToggledGroups((current) => {
+      const next = new Map(current);
+      next.set(id, open);
       return next;
     });
   };
+  const selectedGroupId = selected ? sectionOf(selected).id : null;
   const selectedRowRef = useRef<HTMLDivElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
 
@@ -213,22 +239,7 @@ export function ModelPickerList({
     for (const m of allModels) {
       if (excludeFusion && m.isFusion) continue;
       if (!matches(m)) continue;
-      const sourceId = m.isFusion
-        ? "fusion"
-        : m.sourceId ??
-          (isOllama(m)
-            ? "ollama"
-            : isOpenAICompatible(m)
-              ? "openai-compatible"
-              : "openrouter");
-      const label = m.isFusion
-        ? "OpenRouter Fusion"
-        : m.sourceLabel ??
-          (isOllama(m)
-            ? "Local (Ollama)"
-            : isOpenAICompatible(m)
-              ? "Local (OpenAI-compatible)"
-              : "OpenRouter");
+      const { id: sourceId, label } = sectionOf(m);
       const group = grouped.get(sourceId) ?? { label, models: [] };
       group.models.push(m);
       grouped.set(sourceId, group);
@@ -359,8 +370,12 @@ export function ModelPickerList({
       >
         {groups.map((group, index) => {
           // Searching always shows everything: a match hidden inside a
-          // collapsed section reads as "no results".
-          const collapsed = !search && collapsedGroups.has(group.id);
+          // collapsed section reads as "no results". With nothing selected
+          // there is no section to open, so fall back to showing them all.
+          const collapsed =
+            !search &&
+            selectedGroupId !== null &&
+            !(toggledGroups.get(group.id) ?? group.id === selectedGroupId);
           const modelCount =
             group.id === "ollama"
               ? ollamaAvailable
@@ -376,7 +391,7 @@ export function ModelPickerList({
               {index > 0 ? <div className="my-1 border-t border-border/60" /> : null}
               <button
                 type="button"
-                onClick={() => toggleGroup(group.id)}
+                onClick={() => setGroupOpen(group.id, collapsed)}
                 aria-expanded={!collapsed}
                 className="flex w-full items-center gap-1.5 px-3 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground"
               >
