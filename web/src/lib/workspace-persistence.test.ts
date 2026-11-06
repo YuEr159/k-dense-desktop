@@ -65,6 +65,7 @@ const projectState: ProjectWorkspaceState = {
   sandboxOpen: false,
   chatOpen: true,
   previewOpen: true,
+  transcriptWidth: 768,
   treeWidth: 280,
   chatWidth: 600,
   sandbox: {
@@ -177,6 +178,7 @@ describe("workspace persistence schema", () => {
           computeScope: "invalid",
           treeWidth: -100,
           chatWidth: 10000,
+          transcriptWidth: 10000,
           sandbox: {
             openPaths: ["a.md", "a.md", 42],
             activePath: "deleted.md",
@@ -194,7 +196,10 @@ describe("workspace persistence schema", () => {
       showAutomation: false,
       computeScope: "project",
       treeWidth: 150,
-      chatWidth: 720,
+      // The ceiling matches the slider's, so a width the user picked there
+      // survives a reload instead of being trimmed on the way back in.
+      chatWidth: 1280,
+      transcriptWidth: 1280,
       sandbox: { openPaths: ["a.md"], activePath: "a.md" },
       tabs: [
         { id: "tab-1", sessionId: "same" },

@@ -105,12 +105,34 @@ export function handleTarget(left: PanelId, right: PanelId): HandleTarget | null
 
 export const DEFAULT_TREE_WIDTH = 320;
 export const DEFAULT_CHAT_WIDTH = 640;
+export const DEFAULT_TRANSCRIPT_WIDTH = 768;
+
 /** Both panes may grow as wide as the whole three-column layout allows. */
 export const MAX_PANEL_WIDTH = 1280;
 export const PANEL_WIDTH_RANGE = {
   tree: { min: 150, max: MAX_PANEL_WIDTH, fallback: DEFAULT_TREE_WIDTH },
   chat: { min: 280, max: MAX_PANEL_WIDTH, fallback: DEFAULT_CHAT_WIDTH },
 } as const;
+
+/**
+ * How wide the message column inside the chat pane is allowed to get.
+ *
+ * The chat pane can be much wider than a comfortable line length — a wide
+ * monitor with the preview collapsed is the usual case — so the messages stay
+ * centred in a column of this width instead of stretching edge to edge.
+ */
+export const TRANSCRIPT_WIDTH_RANGE = {
+  min: 480,
+  max: MAX_PANEL_WIDTH,
+  fallback: DEFAULT_TRANSCRIPT_WIDTH,
+} as const;
+
+/** Same bounds the settings slider uses, so the two always agree. */
+export function clampTranscriptWidth(value: number): number {
+  const { min, max, fallback } = TRANSCRIPT_WIDTH_RANGE;
+  if (!Number.isFinite(value)) return fallback;
+  return Math.round(Math.max(min, Math.min(max, value)));
+}
 
 /**
  * The drag handler and the settings field must clamp to the same bounds.

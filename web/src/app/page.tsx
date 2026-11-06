@@ -62,6 +62,7 @@ import { useIsomorphicLayoutEffect } from "@/lib/use-isomorphic-layout-effect";
 import {
   DEFAULT_CHAT_WIDTH,
   DEFAULT_TREE_WIDTH,
+  DEFAULT_TRANSCRIPT_WIDTH,
   PANEL_HANDLE_WIDTH,
   clampPanelWidth,
   fitPanelWidths,
@@ -619,6 +620,9 @@ function WorkspacePage({
   const [chatWidth, setChatWidth] = useState(
     () => initialState?.chatWidth ?? DEFAULT_CHAT_WIDTH,
   );
+  const [transcriptWidth, setTranscriptWidth] = useState(
+    () => initialState?.transcriptWidth ?? DEFAULT_TRANSCRIPT_WIDTH,
+  );
   const [panelOrder, setPanelOrder] = usePanelOrder();
   const swapPanels = useCallback((left: PanelId, right: PanelId) => {
     setPanelOrder((current) => {
@@ -805,6 +809,7 @@ function WorkspacePage({
       previewOpen,
       treeWidth,
       chatWidth,
+      transcriptWidth,
       sandbox: sandboxWorkspace,
     }),
     [
@@ -820,6 +825,7 @@ function WorkspacePage({
       showNotebook,
       tabWorkspaceStates,
       tabs,
+      transcriptWidth,
       treeWidth,
       view,
     ],
@@ -1468,6 +1474,7 @@ function WorkspacePage({
               initialWorkspaceState={tabWorkspaceStates[t.id]}
               isActive={isActive && view === "chat" && t.id === activeTabId}
               isActiveTab={isActive && t.id === activeTabId}
+              transcriptWidth={transcriptWidth}
               allFiles={allFiles}
               sandboxReady={sandbox.tree !== null}
               uploadFiles={sandbox.uploadFiles}
@@ -1534,6 +1541,8 @@ function WorkspacePage({
         request={settingsRequest}
         panelWidths={{ tree: treePx, chat: chatPx }}
         onPanelWidthChange={setPanelWidth}
+        transcriptWidth={transcriptWidth}
+        onTranscriptWidthChange={setTranscriptWidth}
         panelVisibility={{ tree: sandboxOpen, chat: chatOpen, preview: previewOpen }}
         onPanelVisibilityChange={(panel, visible) =>
           panel === "tree"

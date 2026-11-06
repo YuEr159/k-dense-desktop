@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_PANEL_ORDER,
   clampPanelWidth,
+  clampTranscriptWidth,
   fitPanelWidths,
   handleTarget,
   normalizePanelOrder,
@@ -184,6 +185,18 @@ describe("splitPairWidths", () => {
   it("falls back to the minimums when the total cannot be split legally", () => {
     // 150 + 280 is already more than 300.
     expect(splitPairWidths("tree", "chat", 200, 300)).toEqual({ left: 150, right: 280 });
+  });
+});
+
+describe("clampTranscriptWidth", () => {
+  it("holds the message column inside its range", () => {
+    expect(clampTranscriptWidth(10)).toBe(480);
+    expect(clampTranscriptWidth(9999)).toBe(1280);
+    expect(clampTranscriptWidth(900)).toBe(900);
+  });
+
+  it("falls back for a non-finite value", () => {
+    expect(clampTranscriptWidth(Number.NaN)).toBe(768);
   });
 });
 

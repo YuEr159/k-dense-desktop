@@ -1725,6 +1725,8 @@ export interface ChatTabProps {
   isActiveTab: boolean;
   /** Stored session to reopen into this tab (History menu / reload recovery). */
   initialSessionId?: string | null;
+  /** Cap on the message column's width; it stays centred in the chat pane. */
+  transcriptWidth?: number;
   /** Browser-persisted controls, queue, and composer state for this tab. */
   initialWorkspaceState?: ChatWorkspaceState;
   // Shared sandbox/state passed in (one instance for the whole project)
@@ -1757,6 +1759,7 @@ export const ChatTab = forwardRef<ChatTabHandle, ChatTabProps>(function ChatTab(
     isActive,
     isActiveTab,
     initialSessionId,
+    transcriptWidth,
     initialWorkspaceState,
     allFiles,
     sandboxReady,
@@ -2414,8 +2417,16 @@ export const ChatTab = forwardRef<ChatTabHandle, ChatTabProps>(function ChatTab(
         !isActive && "hidden",
       )}
     >
+      {/* The scroll area reserves a scrollbar gutter on both edges, so the
+          message column is inset from the pane. The composer takes the same
+          inset to stay aligned with it. */}
       <Conversation className="flex-1">
-        <ConversationContent className="mx-auto w-full max-w-full px-4">
+        <ConversationContent
+          className="mx-auto w-full px-4"
+          // The pane can be much wider than a readable line, so the messages
+          // stay centred in a column instead of stretching edge to edge.
+          style={transcriptWidth ? { maxWidth: `${transcriptWidth}px` } : undefined}
+        >
           {messages.length === 0 ? (
             hasAnyModelAccess === false ? (
               <div className="flex size-full items-center justify-center p-8">
@@ -2448,7 +2459,14 @@ export const ChatTab = forwardRef<ChatTabHandle, ChatTabProps>(function ChatTab(
         <ConversationScrollButton />
       </Conversation>
 
-      <div className="px-4 pb-6 pt-2">
+      {/* The composer follows the transcript's column width, so the input
+          lines up with the messages above it rather than stretching wider.
+          The extra horizontal padding matches the scrollbar gutter the message
+          column sits inside. */}
+      <div
+        className="mx-auto w-full pb-6 pt-2 [padding-inline:calc(1rem+15px)]"
+        style={transcriptWidth ? { maxWidth: `${transcriptWidth}px` } : undefined}
+      >
         {(reconnecting || (!initialSessionReady && !getSessionId())) && (
           <p role="status" className="mb-2 text-xs text-muted-foreground">
             {reconnecting ? "Reconnecting to this run…" : "Restoring this conversation… Retrying if the server is unavailable."}

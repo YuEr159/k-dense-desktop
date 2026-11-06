@@ -17,7 +17,9 @@ import { LOCALES, useLocale } from "@/lib/i18n/locale";
 import {
   PANEL_IDS,
   PANEL_WIDTH_RANGE,
+  TRANSCRIPT_WIDTH_RANGE,
   clampPanelWidth,
+  clampTranscriptWidth,
   usePanelOrder,
   type PanelId,
 } from "@/lib/panel-order";
@@ -38,11 +40,16 @@ const PANEL_LABELS: Record<PanelId, string> = {
 export function AppearancePanel({
   panelWidths,
   onPanelWidthChange,
+  transcriptWidth,
+  onTranscriptWidthChange,
   panelVisibility,
   onPanelVisibilityChange,
 }: {
   panelWidths?: { tree: number; chat: number };
   onPanelWidthChange?: (panel: "tree" | "chat", value: number) => void;
+  /** Cap on the chat message column; it stays centred in the pane. */
+  transcriptWidth?: number;
+  onTranscriptWidthChange?: (value: number) => void;
   panelVisibility?: { tree: boolean; chat: boolean; preview: boolean };
   onPanelVisibilityChange?: (panel: PanelId, visible: boolean) => void;
 } = {}) {
@@ -343,6 +350,33 @@ export function AppearancePanel({
           pane wherever it sits.
         </p>
       </SettingsCard>
+
+      {transcriptWidth !== undefined && onTranscriptWidthChange ? (
+        <SettingsCard
+          id="transcript-width"
+          title="Chat transcript width"
+          description="How wide the messages get before they stop growing and stay centred in the chat pane. Saved per project."
+        >
+          <label className="flex flex-col gap-1 text-xs">
+            <span className="flex items-baseline justify-between">
+              <span className="text-muted-foreground">Message column</span>
+              <span className="tabular-nums text-muted-foreground">{transcriptWidth} px</span>
+            </span>
+            <input
+              type="range"
+              className="w-full accent-foreground"
+              min={TRANSCRIPT_WIDTH_RANGE.min}
+              max={TRANSCRIPT_WIDTH_RANGE.max}
+              step={10}
+              value={transcriptWidth}
+              aria-label="Chat transcript width"
+              onChange={(e) =>
+                onTranscriptWidthChange(clampTranscriptWidth(Number(e.target.value)))
+              }
+            />
+          </label>
+        </SettingsCard>
+      ) : null}
 
       {panelWidths && onPanelWidthChange ? (
         <SettingsCard

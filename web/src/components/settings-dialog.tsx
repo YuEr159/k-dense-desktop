@@ -142,6 +142,9 @@ export interface SettingsDialogProps {
    */
   panelWidths?: { tree: number; chat: number };
   onPanelWidthChange?: (panel: "tree" | "chat", value: number) => void;
+  /** Cap on the chat message column's width. */
+  transcriptWidth?: number;
+  onTranscriptWidthChange?: (value: number) => void;
   /**
    * Whether the side panes are collapsed. Same ownership rule as the widths,
    * and the same per-project storage: it is layout, not a browser preference.
@@ -156,6 +159,8 @@ export function SettingsDialog({
   request,
   panelWidths,
   onPanelWidthChange,
+  transcriptWidth,
+  onTranscriptWidthChange,
   panelVisibility,
   onPanelVisibilityChange,
 }: SettingsDialogProps) {
@@ -282,6 +287,8 @@ export function SettingsDialog({
               <AppearancePanel
                 panelWidths={panelWidths}
                 onPanelWidthChange={onPanelWidthChange}
+                transcriptWidth={transcriptWidth}
+                onTranscriptWidthChange={onTranscriptWidthChange}
                 panelVisibility={panelVisibility}
                 onPanelVisibilityChange={onPanelVisibilityChange}
               />

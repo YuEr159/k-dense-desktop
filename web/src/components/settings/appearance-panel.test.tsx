@@ -97,4 +97,20 @@ describe("AppearancePanel panel layout", () => {
     render(<AppearancePanel />);
     expect(screen.queryByRole("button", { name: "Hide Files" })).toBeNull();
   });
+
+  // The transcript column belongs to the workspace, so like the widths it only
+  // appears where a host passes it down.
+  it("reports transcript width through its own clamp", () => {
+    const onChange = vi.fn();
+    const { rerender } = render(<AppearancePanel />);
+    expect(document.getElementById("transcript-width")).toBeNull();
+
+    rerender(<AppearancePanel transcriptWidth={768} onTranscriptWidthChange={onChange} />);
+    const slider = screen.getByRole("slider", { name: "Chat transcript width" });
+    expect(slider).toHaveValue("768");
+    expect(slider).toHaveAttribute("max", "1280");
+
+    fireEvent.change(slider, { target: { value: "1280" } });
+    expect(onChange).toHaveBeenCalledWith(1280);
+  });
 });

@@ -9,6 +9,10 @@ import type { PromptImage } from "@/lib/image-attachments";
 import type { ModalComputeScope } from "@/lib/modal-jobs";
 import type { Skill } from "@/lib/use-skills";
 import {
+  PANEL_WIDTH_RANGE,
+  TRANSCRIPT_WIDTH_RANGE,
+} from "@/lib/panel-order";
+import {
   normalizeDelegation,
   normalizeResearchRefs,
   type DelegationChoice,
@@ -102,6 +106,8 @@ export interface ProjectWorkspaceState {
   previewOpen: boolean;
   treeWidth: number;
   chatWidth: number;
+  /** Width of the message column inside the chat pane, centred in it. */
+  transcriptWidth: number;
   sandbox: SandboxWorkspaceState;
 }
 
@@ -365,8 +371,17 @@ function sanitizeStoredProject(value: unknown): StoredProjectState | null {
     // Defaults to shown: a workspace saved before this field existed must not
     // open with the editor gone.
     previewOpen: value.previewOpen !== false,
-    treeWidth: boundedNumber(value.treeWidth, 320, 150, 480),
-    chatWidth: boundedNumber(value.chatWidth, 640, 280, 720),
+    // The ceilings are the same ones the sliders enforce. They used to be
+    // 480/720, which silently undid anything the user set above that on the
+    // next reload.
+    treeWidth: boundedNumber(value.treeWidth, PANEL_WIDTH_RANGE.tree.fallback, PANEL_WIDTH_RANGE.tree.min, PANEL_WIDTH_RANGE.tree.max),
+    chatWidth: boundedNumber(value.chatWidth, PANEL_WIDTH_RANGE.chat.fallback, PANEL_WIDTH_RANGE.chat.min, PANEL_WIDTH_RANGE.chat.max),
+    transcriptWidth: boundedNumber(
+      value.transcriptWidth,
+      TRANSCRIPT_WIDTH_RANGE.fallback,
+      TRANSCRIPT_WIDTH_RANGE.min,
+      TRANSCRIPT_WIDTH_RANGE.max,
+    ),
     sandbox: {
       openPaths,
       activePath: requestedActivePath && openPaths.includes(requestedActivePath)
