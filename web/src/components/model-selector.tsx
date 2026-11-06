@@ -159,6 +159,18 @@ export function ModelPickerList({
   onNavigate,
 }: ModelPickerListProps) {
   const [search, setSearch] = useState("");
+  // Which source sections the user folded away. All open by default: the
+  // list is long, but a picker that opens entirely collapsed makes the first
+  // choice a two-step one.
+  const [collapsedGroups, setCollapsedGroups] = useState<ReadonlySet<string>>(() => new Set());
+  const toggleGroup = (id: string) => {
+    setCollapsedGroups((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
   const selectedRowRef = useRef<HTMLDivElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
 
@@ -345,31 +357,50 @@ export function ModelPickerList({
         aria-label="Models"
         className={cn("relative overflow-y-auto py-1", compact ? "max-h-72" : "max-h-80")}
       >
-        {groups.map((group, index) => (
-          <div key={group.id}>
-            {index > 0 ? <div className="my-1 border-t border-border/60" /> : null}
-            <div className="flex items-center gap-1.5 px-3 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-              {LOCAL_GROUP_IDS.has(group.id) ? (
-                <HardDriveIcon className="size-3" aria-hidden />
-              ) : (
-                <BrainCircuitIcon className="size-3" aria-hidden />
-              )}
-              <span>{group.label}</span>
-              <span className="ml-auto text-[10px] font-normal normal-case tracking-normal text-muted-foreground/70">
-                {group.id === "ollama"
-                  ? ollamaAvailable
-                    ? `${ollamaModels.length} available`
-                    : "not running"
-                  : group.id === "openai-compatible"
-                    ? openaiCompatibleAvailable
-                      ? `${openaiCompatibleModels.length} available`
-                      : "not running"
-                    : `${group.models.length} model${group.models.length === 1 ? "" : "s"}`}
-              </span>
+        {groups.map((group, index) => {
+          // Searching always shows everything: a match hidden inside a
+          // collapsed section reads as "no results".
+          const collapsed = !search && collapsedGroups.has(group.id);
+          const modelCount =
+            group.id === "ollama"
+              ? ollamaAvailable
+                ? `${ollamaModels.length} available`
+                : "not running"
+              : group.id === "openai-compatible"
+                ? openaiCompatibleAvailable
+                  ? `${openaiCompatibleModels.length} available`
+                  : "not running"
+                : `${group.models.length} model${group.models.length === 1 ? "" : "s"}`;
+          return (
+            <div key={group.id}>
+              {index > 0 ? <div className="my-1 border-t border-border/60" /> : null}
+              <button
+                type="button"
+                onClick={() => toggleGroup(group.id)}
+                aria-expanded={!collapsed}
+                className="flex w-full items-center gap-1.5 px-3 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground"
+              >
+                {LOCAL_GROUP_IDS.has(group.id) ? (
+                  <HardDriveIcon className="size-3" aria-hidden />
+                ) : (
+                  <BrainCircuitIcon className="size-3" aria-hidden />
+                )}
+                <span>{group.label}</span>
+                <span className="ml-auto text-[10px] font-normal normal-case tracking-normal text-muted-foreground/70">
+                  {modelCount}
+                </span>
+                <ChevronDownIcon
+                  aria-hidden
+                  className={cn(
+                    "size-3 shrink-0 transition-transform",
+                    collapsed && "-rotate-90",
+                  )}
+                />
+              </button>
+              {collapsed ? null : group.models.map(renderModelRow)}
             </div>
-            {group.models.map(renderModelRow)}
-          </div>
-        ))}
+          );
+        })}
 
         {!search && !groups.some((group) => group.id === "ollama") ? (
           <div>
