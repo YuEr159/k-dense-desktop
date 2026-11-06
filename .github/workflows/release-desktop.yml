@@ -34,6 +34,13 @@ jobs:
   # but its own tag is v<server version>; this guard keeps the two apart.
   check:
     runs-on: ubuntu-latest
+    # Creating the release here, rather than in each upload step, is what keeps
+    # the generated notes from stacking: `action-gh-release` appends to an
+    # existing release's body instead of replacing it, so one build with two
+    # successful uploads left two copies of the same "Full Changelog", and every
+    # retry added another.
+    permissions:
+      contents: write
     outputs:
       desktop: ${{ steps.match.outputs.desktop }}
       version: ${{ steps.match.outputs.version }}
@@ -80,6 +87,22 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "platforms=$PLATFORMS" >> "$GITHUB_OUTPUT"
+
+      # The release, and its notes, are created exactly once per tag — before
+      # any installer is built. The upload steps below then only attach files.
+      - name: Create the release
+        if: steps.match.outputs.desktop == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.match.outputs.tag }}
+        run: |
+          # A rebuild of a tag that already has a release keeps the notes it
+          # was published with; regenerating them is what produced duplicates.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; leaving its notes untouched."
+            exit 0
+          fi
+          gh release create "$TAG" --title "$TAG" --generate-notes --verify-tag
 
   windows:
     needs: check
@@ -150,7 +173,8 @@ jobs:
           files: |
             dist/Kady-*-Setup.exe
             dist/Kady-*-Portable.zip
-          generate_release_notes: true
+          # No generate_release_notes here: the check job already created the
+          # release, and this action appends rather than replaces.
           fail_on_unmatched_files: true
 
   mac:
@@ -224,5 +248,5 @@ jobs:
           files: |
             dist/Kady-*-mac-*.dmg
             dist/Kady-*-mac-*.zip
-          generate_release_notes: true
+          # See the Windows job: appending here duplicates the notes.
           fail_on_unmatched_files: true

@@ -8,7 +8,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { KADY_SKILLS_CACHE_DIR } from "../src/config.ts";
 import {
   cacheKeyForSource,
@@ -16,6 +16,8 @@ import {
   fetchSkills,
   mergeCatalogueSources,
   catalogueFetchState,
+  noteCatalogueOutput,
+  resetCatalogueStateForTests,
   resolveSkillsCli,
   stagedSkillsDir,
 } from "../src/agent/skills-fetch.ts";
@@ -215,5 +217,37 @@ describe("skills CLI fetcher", () => {
 
   it("reports a catalogue download in flight so a waiting surface can say so", () => {
     expect(["idle", "syncing"]).toContain(catalogueFetchState().state);
+  });
+});
+
+describe("noteCatalogueOutput", () => {
+  beforeEach(() => resetCatalogueStateForTests());
+
+  // Captured from skills 1.7.0: clack colours the count, so the digits sit
+  // between escape sequences rather than beside plain text.
+  it("reads the discovered count out of a colourised line", () => {
+    noteCatalogueOutput("\u001b[?25h\u001b[1G\u001b[J◇  Found \u001b[32m177\u001b[39m skills\n");
+    const state = catalogueFetchState();
+    expect(state.discovered).toBe(177);
+    expect(state.phase).toBe("installing");
+  });
+
+  // The plain form is what a future release that drops colour will print; the
+  // splash must keep working then rather than silently lose its count.
+  it("reads a plain, uncoloured line too", () => {
+    noteCatalogueOutput("◇  Found 42 skills\n");
+    expect(catalogueFetchState().discovered).toBe(42);
+  });
+
+  it("marks the copy pass even when no count has been seen", () => {
+    noteCatalogueOutput("●  Installing all 177 skills\n");
+    expect(catalogueFetchState().phase).toBe("installing");
+  });
+
+  it("leaves the state alone for spinner frames and other chatter", () => {
+    noteCatalogueOutput("◒  Cloning repository…\u001b[1G\u001b[J◐  Cloning repository…");
+    const state = catalogueFetchState();
+    expect(state.phase).toBeUndefined();
+    expect(state.discovered).toBeUndefined();
   });
 });

@@ -29,6 +29,7 @@ import { runtimeEnvironment } from "./runtime-env.mjs";
 import { appName, currentLanguage, setLanguageFromLocale, t } from "./shell-i18n.mjs";
 import { captureConsole, logPath, logsDirectory, logServiceLine, openLog, write as logLine } from "./shell-log.mjs";
 import { fallbackLocale, readPageLocale } from "./page-locale.mjs";
+import { pythonHint, skillsHint } from "./splash-progress.mjs";
 import { pollUntilReady } from "./startup-readiness.mjs";
 import { restoreWindowState as restoreSavedWindowState, windowStateToSave } from "./window-state.mjs";
 
@@ -721,15 +722,6 @@ function isInternalUrl(rawUrl) {
   }
 }
 
-/** Just the host, for naming a package mirror in a one-line status. */
-function hostOf(rawUrl) {
-  try {
-    return new URL(rawUrl).host;
-  } catch {
-    return null;
-  }
-}
-
 /**
  * Drive the startup placeholder's two lines while the services come up.
  *
@@ -777,13 +769,10 @@ function startStatusPolling(window) {
       const catalogue = body?.setup?.catalogue;
       if (helpers?.state === "syncing") {
         // Name the mirror when a probe picked one: without it, a first launch
-        // that is fast because of an unseen choice looks like luck.
-        say(
-          t("splash.python"),
-          helpers.index
-            ? t("splash.pythonMirror", { host: hostOf(helpers.index) ?? helpers.index })
-            : t("splash.pythonHint"),
-        );
+        // that is fast because of an unseen choice looks like luck. The
+        // counters below it come from uv's own progress lines, so a multi-
+        // minute install keeps moving instead of repeating one sentence.
+        say(t("splash.python"), pythonHint(helpers, t));
       } else if (helpers?.state === "failed") {
         say(
           t("splash.starting"),
@@ -792,7 +781,7 @@ function startStatusPolling(window) {
       } else if (catalogue?.state === "syncing") {
         // A first launch downloads the skill catalogue (460 MB). Saying so is
         // the difference between "slow" and "frozen" on a poor link.
-        say(t("splash.skills"), t("splash.skillsHint"));
+        say(t("splash.skills"), skillsHint(catalogue, t));
       } else {
         say(t("splash.starting"), t("splash.loadingUi"));
       }

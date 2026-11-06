@@ -45,16 +45,53 @@ const CATALOGUE_DEADLINE_MS = 2 * 60 * 1000;
  * Whether a catalogue download is in flight, so a surface that is waiting can
  * say so. A first launch downloads 460 MB before any skill exists; without a
  * line about it the app looks hung, which is exactly how it was reported.
+ *
+ * `phase` is as far as this path can go: the bundled `skills` CLI animates a
+ * spinner rather than reporting bytes, and `--copy` writes the trees as they
+ * arrive, so there is no byte count to show. Naming the stage and the skill
+ * count still separates "downloading" from "installing 177 skills", which is
+ * the difference between a slow link and a stuck app.
  */
 export interface CatalogueState {
   state: "idle" | "syncing";
+  /** `cloning` until the repo is on disk, then `installing` while it copies. */
+  phase?: "cloning" | "installing";
+  /** Skills the source reported, once it has been cloned and scanned. */
+  discovered?: number;
   startedAt?: number;
 }
 
 const catalogueState: CatalogueState = { state: "idle" };
 
+/**
+ * Fold one chunk of the CLI's output into the state.
+ *
+ * The CLI is a clack prompt: it prints `Found <n> skills` once discovery
+ * finishes and `Installing all <n> skills` before the copy pass. Both are
+ * matched loosely because the surrounding text is decorative and colourised —
+ * a wording change must leave the phase unknown, never break the download.
+ */
+export function noteCatalogueOutput(chunk: string): void {
+  const discovered = chunk.match(/Found\s+\x1b\[[0-9;]*m?(\d+)\x1b\[[0-9;]*m?\s+skills/)?.[1] ??
+    chunk.match(/Found\s+(\d+)\s+skills/)?.[1];
+  if (discovered) {
+    catalogueState.discovered = Number(discovered);
+    catalogueState.phase = "installing";
+  }
+  if (/Installing\s+(all\s+)?\d+\s+skills/.test(chunk)) catalogueState.phase = "installing";
+}
+
 export function catalogueFetchState(): CatalogueState {
   return { ...catalogueState };
+}
+
+/** Test seam: the phase counters are module-level, so tests would otherwise
+ *  observe each other's output. */
+export function resetCatalogueStateForTests(): void {
+  catalogueState.state = "idle";
+  delete catalogueState.phase;
+  delete catalogueState.discovered;
+  delete catalogueState.startedAt;
 }
 /** Trailing CLI output kept for error messages. */
 const OUTPUT_TAIL_LIMIT = 4096;
@@ -268,6 +305,9 @@ export async function fetchSkills(options: FetchSkillsOptions): Promise<FetchedS
         if (combined.length > OUTPUT_TAIL_LIMIT * 4) {
           combined = combined.slice(-OUTPUT_TAIL_LIMIT * 2);
         }
+        // Progress for the launch splash only: this CLI serves every install,
+        // and a routine skill install has no splash to report to.
+        if (options.cacheKey.startsWith(CATALOGUE_CACHE_KEY)) noteCatalogueOutput(chunk);
       };
       child.stdout.setEncoding("utf-8");
       child.stderr.setEncoding("utf-8");
@@ -504,11 +544,15 @@ export async function fetchCatalogue(
 ): Promise<FetchedCatalogue> {
   catalogueState.state = "syncing";
   catalogueState.startedAt = Date.now();
+  catalogueState.phase = "cloning";
+  delete catalogueState.discovered;
   try {
     return await fetchCatalogueInner(onFallback);
   } finally {
     catalogueState.state = "idle";
     delete catalogueState.startedAt;
+    delete catalogueState.phase;
+    delete catalogueState.discovered;
   }
 }
 

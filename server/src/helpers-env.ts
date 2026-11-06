@@ -222,11 +222,49 @@ export type HelperVenvState = {
    * looking stuck.
    */
   index?: string;
+  /**
+   * Live counters parsed out of uv's own progress lines, so the splash can say
+   * how far along a multi-minute first install is rather than repeating one
+   * unchanging sentence.
+   *
+   * uv writes everything to stderr (measured on 0.12.13: stdout is empty for a
+   * full sync), which is why the child is spawned with a piped stderr instead
+   * of `stdio: "ignore"`.
+   */
+  packagesDownloaded?: number;
+  /** Total bytes named by the `Downloading <name> (<size>)` lines so far. */
+  downloadBytes?: number;
+  /** Packages uv reported as installed, when it got that far. */
+  packagesInstalled?: number;
+  /** Epoch ms when this sync started, so the caller can show elapsed time. */
+  startedAt?: number;
 };
 
 const helperState: HelperVenvState = {
   state: fs.existsSync(venvPythonPath()) ? "ready" : "idle",
 };
+
+/**
+ * Pull the running totals out of one chunk of uv's stderr.
+ *
+ * The lines are stable across uv 0.5–0.12 and are the only structured progress
+ * uv emits on a non-TTY: `Downloading numpy (12.0MiB)`, ` Downloaded numpy`,
+ * `Installed 1 package`. Anything unrecognised is ignored — this feeds a
+ * progress hint, so a changed wording must degrade to "no counter", never to
+ * an error.
+ */
+export function accumulateUvProgress(state: HelperVenvState, chunk: string): void {
+  const downloading = chunk.matchAll(/^\s*Downloading\s+\S+\s+\(([\d.]+)\s*([KMGT]?)i?B\)/gm);
+  for (const match of downloading) {
+    const scale = { "": 1, K: 1024, M: 1024 ** 2, G: 1024 ** 3, T: 1024 ** 4 }[match[2]] ?? 1;
+    // Rounded per line: the sizes are decimal approximations to begin with,
+    // and a running fractional byte count reads as false precision.
+    state.downloadBytes = Math.round((state.downloadBytes ?? 0) + Number(match[1]) * scale);
+    state.packagesDownloaded = (state.packagesDownloaded ?? 0) + 1;
+  }
+  const installing = chunk.match(/^\s*Installed\s+(\d+)\s+package/m);
+  if (installing) state.packagesInstalled = Number(installing[1]);
+}
 
 /** Live view of the background sync; mutated in place so readers never see a stale copy. */
 export function helperVenvState(): HelperVenvState {
@@ -307,12 +345,22 @@ export async function syncHelperVenvAsync(): Promise<number | null> {
     return null;
   }
   if (index) helperState.index = index;
+  helperState.startedAt = Date.now();
+  delete helperState.packagesDownloaded;
+  delete helperState.downloadBytes;
+  delete helperState.packagesInstalled;
   return new Promise((resolve) => {
     const child = spawn(uv, ["sync", "--frozen", "--python", "3.12"], {
       cwd: projectDir,
-      stdio: "ignore",
+      // uv writes its progress to stderr, so piping it is the only way to say
+      // anything more useful than "installing packages" for the several
+      // minutes a cold install takes. Nothing here is a TTY, which is why uv
+      // emits one line per package rather than an animated bar.
+      stdio: ["ignore", "ignore", "pipe"],
       env: uvSyncEnv(index),
     });
+    child.stderr?.setEncoding("utf-8");
+    child.stderr?.on("data", (chunk: string) => accumulateUvProgress(helperState, chunk));
     // Long enough for a cold install on a slow link: measured 17m22s against
     // PyPI from a residential connection in China, where the previous 15
     // minutes killed the child mid-download and left no interpreter at all.
@@ -335,6 +383,13 @@ export async function syncHelperVenvAsync(): Promise<number | null> {
         helperState.state = "failed";
         helperState.detail = code === null ? "timed out" : `uv exited with status ${code}`;
       }
+      // The counters only describe the run that just ended; leaving them on a
+      // finished state would have the splash report progress for work that is
+      // no longer happening.
+      delete helperState.packagesDownloaded;
+      delete helperState.downloadBytes;
+      delete helperState.packagesInstalled;
+      delete helperState.startedAt;
       resolve(code);
     });
   });

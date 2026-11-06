@@ -15,6 +15,7 @@
     "shell-i18n.mjs",
     "shell-log.mjs",
     "page-locale.mjs",
+    "splash-progress.mjs",
     "startup-readiness.mjs",
     "window-state.mjs",
     "package.json"

@@ -196,6 +196,21 @@ export async function buildApp() {
       helpers: {
         state: helperVenvState().state,
         venv: HELPERS_VENV_DIR,
+        // Live counters from uv's stderr, so a first install that takes
+        // several minutes can show how far it has got instead of repeating
+        // one sentence. Absent until uv prints its first download line.
+        ...(helperVenvState().packagesDownloaded !== undefined
+          ? { packagesDownloaded: helperVenvState().packagesDownloaded }
+          : {}),
+        ...(helperVenvState().downloadBytes !== undefined
+          ? { downloadBytes: helperVenvState().downloadBytes }
+          : {}),
+        ...(helperVenvState().packagesInstalled !== undefined
+          ? { packagesInstalled: helperVenvState().packagesInstalled }
+          : {}),
+        ...(helperVenvState().startedAt !== undefined
+          ? { startedAt: helperVenvState().startedAt }
+          : {}),
       },
       // A first launch downloads the 460 MB skill catalogue. The shell shows
       // this on the splash so a slow link reads as work in progress, not a
