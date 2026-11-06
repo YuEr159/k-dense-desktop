@@ -75,6 +75,10 @@
 
 :root {
   --radius: 0.625rem;
+  /* Native UI chrome — form controls, scrollbars and the resize cursor on a
+     divider — follows this, not our class-based theme. Without it the OS
+     setting wins, so a light theme on a dark desktop draws a white cursor. */
+  color-scheme: light;
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
@@ -109,6 +113,7 @@
 }
 
 .dark {
+  color-scheme: dark;
   --background: oklch(0.145 0 0);
   --foreground: oklch(0.985 0 0);
   --card: oklch(0.205 0 0);
