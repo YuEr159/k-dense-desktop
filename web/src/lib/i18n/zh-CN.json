@@ -468,7 +468,7 @@
   "Panel widths": "面板宽度",
   "Chat transcript width": "对话正文宽度",
   "Message column": "消息栏",
-  "How wide the messages get before they stop growing and stay centred in the chat pane. Saved per project.": "消息在加宽到什么程度后停止变宽、居中留在对话面板里。按项目保存。",
+  "Maximum width of the transcript and composer columns. Saved per project.": "对话正文与输入栏的最大宽度，按项目保存。",
   "Left to right on wide windows. Toggle a pane's eye to collapse it. On narrow windows the layout stays fixed.": "宽窗口下从左到右排列。点击面板旁的眼睛图标可以收起该面板。窄窗口下布局固定不变。",
   "The preview always takes the leftover width, so it stays the widest pane wherever it sits.": "预览始终占据剩余宽度，因此无论排在哪里它都是最宽的一栏。",
   "Drag a slider, or drag the divider between the panes. Saved per project.": "拖动滑块，或直接拖动两个面板之间的分隔线。按项目保存。",
