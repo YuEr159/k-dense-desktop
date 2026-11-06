@@ -15,18 +15,18 @@ it("copies project metadata to writable storage without modifying shipped resour
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "kady-helper-project-"));
   try {
     process.env.KADY_HELPERS_PROJECT_DIR = dir;
-    expect(helperProjectDirectory()).toBe(dir);
+    expect(helperProjectDirectory(process.env.KADY_PYPI_INDEX ?? null)).toBe(dir);
     for (const name of ["pyproject.toml", "uv.lock"]) {
       expect(fs.readFileSync(path.join(dir, name))).toEqual(fs.readFileSync(path.join(HELPERS_DIR, name)));
     }
     fs.writeFileSync(path.join(dir, "uv.lock"), "stale local lock");
-    helperProjectDirectory();
+    helperProjectDirectory(process.env.KADY_PYPI_INDEX ?? null);
     expect(fs.readFileSync(path.join(dir, "uv.lock"))).toEqual(fs.readFileSync(path.join(HELPERS_DIR, "uv.lock")));
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 it("source mode retains the existing helper location", () => {
   delete process.env.KADY_HELPERS_PROJECT_DIR;
-  expect(helperProjectDirectory()).toBe(HELPERS_DIR);
+  expect(helperProjectDirectory(process.env.KADY_PYPI_INDEX ?? null)).toBe(HELPERS_DIR);
 });
 
 describe("mirror lock rewrite", () => {
@@ -36,7 +36,7 @@ describe("mirror lock rewrite", () => {
       process.env.KADY_HELPERS_PROJECT_DIR = dir;
       if (index === undefined) delete process.env.KADY_PYPI_INDEX;
       else process.env.KADY_PYPI_INDEX = index;
-      helperProjectDirectory();
+      helperProjectDirectory(process.env.KADY_PYPI_INDEX ?? null);
       run(dir);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });

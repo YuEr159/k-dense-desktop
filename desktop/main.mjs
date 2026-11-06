@@ -721,6 +721,15 @@ function isInternalUrl(rawUrl) {
   }
 }
 
+/** Just the host, for naming a package mirror in a one-line status. */
+function hostOf(rawUrl) {
+  try {
+    return new URL(rawUrl).host;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Drive the startup placeholder's two lines while the services come up.
  *
@@ -767,7 +776,14 @@ function startStatusPolling(window) {
       const helpers = body?.setup?.helpers;
       const catalogue = body?.setup?.catalogue;
       if (helpers?.state === "syncing") {
-        say(t("splash.python"), t("splash.pythonHint"));
+        // Name the mirror when a probe picked one: without it, a first launch
+        // that is fast because of an unseen choice looks like luck.
+        say(
+          t("splash.python"),
+          helpers.index
+            ? t("splash.pythonMirror", { host: hostOf(helpers.index) ?? helpers.index })
+            : t("splash.pythonHint"),
+        );
       } else if (helpers?.state === "failed") {
         say(
           t("splash.starting"),

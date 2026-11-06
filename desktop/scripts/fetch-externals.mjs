@@ -172,6 +172,7 @@ const UV = {
   url: "https://files.pythonhosted.org/packages/69/1b/f40b1ad51226c2ae8707aa124f3b31f9b176a00482048dadd42d9b953d1e/uv-0.12.13-py3-none-win_amd64.whl",
   mirrors: [
     "https://pypi.tuna.tsinghua.edu.cn/packages/69/1b/f40b1ad51226c2ae8707aa124f3b31f9b176a00482048dadd42d9b953d1e/uv-0.12.13-py3-none-win_amd64.whl",
+    "https://mirrors.aliyun.com/pypi/packages/69/1b/f40b1ad51226c2ae8707aa124f3b31f9b176a00482048dadd42d9b953d1e/uv-0.12.13-py3-none-win_amd64.whl",
   ],
   name: "uv.whl",
   // PyPI publishes the digest; a mismatch means a truncated or substituted file.
@@ -214,12 +215,57 @@ function log(msg) {
   console.log(msg);
 }
 
+/** How long one candidate source gets to answer before it is skipped. */
+const PROBE_TIMEOUT_MS = 2500;
+
+/**
+ * Order the sources by measured time-to-first-byte, fastest first.
+ *
+ * The archives here are hundreds of megabytes, so the order decides whether a
+ * build takes a minute or half an hour. A HEAD request costs a round trip and
+ * tells the one thing that matters: whether this host answers from here.
+ *
+ * Sources that fail or time out are simply left in place, after the measured
+ * ones, in their declared order — a probe that cannot run must never stop a
+ * download that would have worked, so the caller still walks the full list.
+ */
+async function rankSources(urls) {
+  if (urls.length < 2) return urls;
+  const measure = async (url) => {
+    const started = Date.now();
+    try {
+      const res = await fetch(url, {
+        method: "HEAD",
+        redirect: "follow",
+        signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+      });
+      return res.ok ? { url, ms: Date.now() - started } : null;
+    } catch {
+      return null;
+    }
+  };
+  const measured = (await Promise.all(urls.map(measure)))
+    .filter((r) => r !== null)
+    .sort((a, b) => a.ms - b.ms);
+  if (measured.length === 0) {
+    log(`  no source answered a probe; trying them in order`);
+    return urls;
+  }
+  const ranked = measured.map((r) => r.url);
+  const unmeasured = urls.filter((u) => !ranked.includes(u));
+  log(
+    `  fastest source: ${new URL(ranked[0]).host} (${measured[0].ms} ms)` +
+      (measured.length > 1 ? `, next ${new URL(ranked[1]).host} (${measured[1].ms} ms)` : ""),
+  );
+  return [...ranked, ...unmeasured];
+}
+
 async function download(spec, dest) {
   if (fs.existsSync(dest) && !force) {
     log(`  ${spec.name} already present, skipping`);
     return;
   }
-  const candidates = [spec.url, ...(spec.mirrors ?? [])];
+  const candidates = await rankSources([spec.url, ...(spec.mirrors ?? [])]);
   let lastError = null;
   for (const url of candidates) {
     log(`  downloading ${spec.name} (${url})`);
@@ -265,10 +311,18 @@ function unzip(zipPath, destDir) {
 const MAC_UV = {
   arm64: {
     url: "https://files.pythonhosted.org/packages/2a/33/ef14dc7c9c4cfaf0c3a4aed5a298b76b5dea94c75b233f7620c49c9b2e09/uv-0.12.13-py3-none-macosx_11_0_arm64.whl",
+    mirrors: [
+      "https://pypi.tuna.tsinghua.edu.cn/packages/2a/33/ef14dc7c9c4cfaf0c3a4aed5a298b76b5dea94c75b233f7620c49c9b2e09/uv-0.12.13-py3-none-macosx_11_0_arm64.whl",
+      "https://mirrors.aliyun.com/pypi/packages/2a/33/ef14dc7c9c4cfaf0c3a4aed5a298b76b5dea94c75b233f7620c49c9b2e09/uv-0.12.13-py3-none-macosx_11_0_arm64.whl",
+    ],
     sha256: "f86e5f02883c2e7a21bf522f4aa520c20d4f779d9a3368fbd6cdfe4a8f9549b5",
   },
   x64: {
     url: "https://files.pythonhosted.org/packages/7b/e9/de1916ac6602c226838aa1eee1033ce68138427399c63f9b47a5a1fa3dba/uv-0.12.13-py3-none-macosx_10_12_x86_64.whl",
+    mirrors: [
+      "https://pypi.tuna.tsinghua.edu.cn/packages/7b/e9/de1916ac6602c226838aa1eee1033ce68138427399c63f9b47a5a1fa3dba/uv-0.12.13-py3-none-macosx_10_12_x86_64.whl",
+      "https://mirrors.aliyun.com/pypi/packages/7b/e9/de1916ac6602c226838aa1eee1033ce68138427399c63f9b47a5a1fa3dba/uv-0.12.13-py3-none-macosx_10_12_x86_64.whl",
+    ],
     sha256: "ac7f135750b7419283029edb93453b4d41c7d7ff90f9b3860a6e474ddf98f016",
   },
 };

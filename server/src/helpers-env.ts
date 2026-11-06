@@ -50,21 +50,118 @@ export const HELPERS_VENV_DIR = path.resolve(
  * digests are kept as they are, so what lands in the venv is still the
  * audited package the lock pinned.
  */
-function pypiIndex(): string | null {
-  const raw = process.env.KADY_PYPI_INDEX?.trim();
-  if (!raw) return null;
+/** Accept only an http(s) URL; anything else means "no mirror". */
+function validIndex(raw: string | null | undefined): string | null {
+  const trimmed = raw?.trim();
+  if (!trimmed) return null;
   try {
-    const url = new URL(raw);
+    const url = new URL(trimmed);
     if (url.protocol !== "http:" && url.protocol !== "https:") return null;
-    return raw.replace(/\/+$/, "");
+    return trimmed.replace(/\/+$/, "");
   } catch {
     return null;
   }
 }
 
+function pypiIndex(): string | null {
+  return validIndex(process.env.KADY_PYPI_INDEX);
+}
+
+/**
+ * The index actually used for this launch: the user's choice, or the fastest
+ * candidate when they have not made one.
+ *
+ * Resolved once per process. The lookup has to happen before
+ * `helperProjectDirectory()` writes the rewritten lock, because that copy is
+ * what `--frozen` downloads from — so this is awaited at the top of the sync,
+ * not read lazily at the point of use.
+ *
+ * An explicit `KADY_PYPI_INDEX` always wins: a setting someone took the
+ * trouble to make should not be overridden by a two-second measurement.
+ */
+let resolvedIndex: Promise<string | null> | null = null;
+
+export function resolvePypiIndex(): Promise<string | null> {
+  if (resolvedIndex) return resolvedIndex;
+  resolvedIndex = (async () => {
+    const configured = pypiIndex();
+    if (configured) return configured;
+    const probes = await probePypiIndexes();
+    // Empty means every probe failed; leaving the index unset then is the
+    // safe answer — uv falls back to PyPI itself, which is what a build
+    // without this feature would have done anyway.
+    const best = probes[0];
+    if (!best) return null;
+    // PyPI itself needs no rewrite: the lock already points there.
+    if (best.index.startsWith("https://pypi.org/simple")) return null;
+    return validIndex(best.index);
+  })();
+  return resolvedIndex;
+}
+
+/** Test seam: forget the memoised choice. */
+export function resetPypiIndexForTests(): void {
+  resolvedIndex = null;
+}
+
 /** Artifact hosts a mirror URL stands in for, given its own host. */
 function mirrorHosts(index: string): { registry: string; artifact: string } {
   return { registry: index, artifact: new URL(index).origin };
+}
+
+/**
+ * Indexes worth measuring, in the order they are tried when probing fails.
+ *
+ * PyPI itself is first: where it is fast it is also the most complete. The
+ * rest are the mirrors that carry the scientific wheels this project needs,
+ * and they matter exactly where files.pythonhosted.org is slow.
+ */
+export const PYPI_CANDIDATES = [
+  "https://pypi.org/simple",
+  "https://pypi.tuna.tsinghua.edu.cn/simple",
+  "https://mirrors.aliyun.com/pypi/simple",
+] as const;
+
+/** How long one index gets to produce its first byte. */
+export const PYPI_PROBE_TIMEOUT_MS = 2500;
+
+/** Delay before giving up on a probe; kept short so startup is never held up. */
+export type PypiProbe = { index: string; ms: number };
+
+/**
+ * Time-to-first-byte for each candidate index, fastest first.
+ *
+ * Measuring the whole index page would be honest about throughput but costs
+ * seconds and megabytes; the first byte already separates "reachable" from
+ * "not", which is what decides between a 26-second and a 17-minute install.
+ *
+ * Anything that fails or times out is absent from the result rather than
+ * ranked last: a caller that gets an empty list falls back to trying in
+ * declaration order, so a broken probe can never make a working download
+ * impossible.
+ */
+export async function probePypiIndexes(
+  candidates: readonly string[] = PYPI_CANDIDATES,
+  timeoutMs = PYPI_PROBE_TIMEOUT_MS,
+): Promise<PypiProbe[]> {
+  const measure = async (index: string): Promise<PypiProbe | null> => {
+    const started = Date.now();
+    try {
+      const res = await fetch(index, {
+        method: "HEAD",
+        redirect: "follow",
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (!res.ok) return null;
+      return { index, ms: Date.now() - started };
+    } catch {
+      return null;
+    }
+  };
+  const results = await Promise.all(candidates.map(measure));
+  return results
+    .filter((r): r is PypiProbe => r !== null)
+    .sort((a, b) => a.ms - b.ms);
 }
 
 /** Point a lockfile's PyPI URLs at `index`, leaving versions and hashes alone. */
@@ -75,19 +172,28 @@ function rewriteLockForMirror(source: string, index: string): string {
     .split("https://files.pythonhosted.org").join(artifact);
 }
 
-/** uv may update its lock/project files; signed app resources are read-only. */
-export function helperProjectDirectory(): string {
+/**
+ * uv may update its lock/project files; signed app resources are read-only.
+ *
+ * `index` is the already-resolved mirror (see `resolvePypiIndex`); passing it
+ * in rather than reading the environment here keeps the async probe out of a
+ * function the sync path calls synchronously, and keeps the resumed copy and
+ * `UV_DEFAULT_INDEX` describing the same host.
+ */
+export function helperProjectDirectory(index: string | null = pypiIndex()): string {
   const override = process.env.KADY_HELPERS_PROJECT_DIR?.trim();
   if (!override) return HELPERS_DIR;
   const destination = path.resolve(override);
   if (destination === HELPERS_DIR) return HELPERS_DIR;
   fs.mkdirSync(destination, { recursive: true });
-  const index = pypiIndex();
+  // Validate here rather than trusting the caller: this function is public and
+  // a bad string would otherwise reach `new URL` inside the rewrite.
+  const mirror = validIndex(index);
   for (const name of ["pyproject.toml", "uv.lock"]) {
     const source = path.join(HELPERS_DIR, name);
     const target = path.join(destination, name);
-    if (name === "uv.lock" && index) {
-      fs.writeFileSync(target, rewriteLockForMirror(fs.readFileSync(source, "utf-8"), index), "utf-8");
+    if (name === "uv.lock" && mirror) {
+      fs.writeFileSync(target, rewriteLockForMirror(fs.readFileSync(source, "utf-8"), mirror), "utf-8");
     } else {
       fs.copyFileSync(source, target);
     }
@@ -110,6 +216,12 @@ export type HelperVenvState = {
   state: "idle" | "syncing" | "ready" | "failed" | "unavailable";
   /** Present on failure: uv's exit status, or why uv was not found. */
   detail?: string;
+  /**
+   * Where the packages are being fetched from, when that is not plain PyPI.
+   * Surfaced so a slow first launch has a visible explanation instead of
+   * looking stuck.
+   */
+  index?: string;
 };
 
 const helperState: HelperVenvState = {
@@ -138,7 +250,7 @@ export function helperPython(): string {
  * pyproject.toml and uv.lock from cwd — so the project stays the shipped
  * payload while the environment lands somewhere writable.
  */
-function uvSyncEnv(): NodeJS.ProcessEnv {
+function uvSyncEnv(index: string | null): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv =
     HELPERS_VENV_DIR === path.join(HELPERS_DIR, ".venv")
       ? { ...process.env }
@@ -146,8 +258,8 @@ function uvSyncEnv(): NodeJS.ProcessEnv {
   // `--frozen` takes artifact URLs from the lock, so the index variable only
   // matters for a re-resolve; the lock rewrite above is what actually moves
   // the download. Set it anyway for the case where the lock and the mirror
-  // disagree enough that uv re-resolves.
-  const index = pypiIndex();
+  // disagree enough that uv re-resolves — and pass the same index the lock
+  // was rewritten with, so the two never name different hosts.
   if (index) env.UV_DEFAULT_INDEX = index;
   return env;
 }
@@ -170,31 +282,36 @@ export function syncHelperVenv(): boolean {
  *
  * Resolves to the exit status, or null when uv is unavailable.
  */
-export function syncHelperVenvAsync(): Promise<number | null> {
+export async function syncHelperVenvAsync(): Promise<number | null> {
+  const uv = findUv();
+  if (!uv) {
+    helperState.state = "unavailable";
+    return null;
+  }
+  helperState.state = "syncing";
+  try {
+    fs.mkdirSync(path.dirname(HELPERS_VENV_DIR), { recursive: true });
+  } catch {
+    // A read-only data root still lets the sync fail loudly on its own terms.
+  }
+  let projectDir: string;
+  let index: string | null;
+  try {
+    // The probe has to finish before the lock is copied: `--frozen`
+    // downloads from whatever hosts that copy names.
+    index = await resolvePypiIndex();
+    projectDir = helperProjectDirectory(index);
+  } catch (error) {
+    helperState.state = "failed";
+    helperState.detail = String(error);
+    return null;
+  }
+  if (index) helperState.index = index;
   return new Promise((resolve) => {
-    const uv = findUv();
-    if (!uv) {
-      helperState.state = "unavailable";
-      resolve(null);
-      return;
-    }
-    helperState.state = "syncing";
-    try {
-      fs.mkdirSync(path.dirname(HELPERS_VENV_DIR), { recursive: true });
-    } catch {
-      // A read-only data root still lets the sync fail loudly on its own terms.
-    }
-    let projectDir: string;
-    try { projectDir = helperProjectDirectory(); } catch (error) {
-      helperState.state = "failed";
-      helperState.detail = String(error);
-      resolve(null);
-      return;
-    }
     const child = spawn(uv, ["sync", "--frozen", "--python", "3.12"], {
       cwd: projectDir,
       stdio: "ignore",
-      env: uvSyncEnv(),
+      env: uvSyncEnv(index),
     });
     // Long enough for a cold install on a slow link: measured 17m22s against
     // PyPI from a residential connection in China, where the previous 15
@@ -223,15 +340,26 @@ export function syncHelperVenvAsync(): Promise<number | null> {
   });
 }
 
+/**
+ * Synchronous variant, used by the prep script and by callers that cannot
+ * await.
+ *
+ * The index here is the synchronously readable one — an explicit
+ * `KADY_PYPI_INDEX`, or nothing. Probing would mean blocking the thread for
+ * up to `PYPI_PROBE_TIMEOUT_MS`, which is the opposite of what the background
+ * path exists to avoid; a caller that wants the measurement uses
+ * `syncHelperVenvAsync`.
+ */
 function runUvSync() {
   const uv = findUv();
   if (!uv) return null;
+  const index = pypiIndex();
   fs.mkdirSync(path.dirname(HELPERS_VENV_DIR), { recursive: true });
   return spawnSync(uv, ["sync", "--frozen", "--python", "3.12"], {
-    cwd: helperProjectDirectory(),
+    cwd: helperProjectDirectory(index),
     stdio: "ignore",
     // Same ceiling as the async path, for the same reason.
     timeout: 45 * 60 * 1000,
-    env: uvSyncEnv(),
+    env: uvSyncEnv(index),
   });
 }
