@@ -99,6 +99,7 @@ export interface ProjectWorkspaceState {
   computeScope: ModalComputeScope;
   sandboxOpen: boolean;
   chatOpen: boolean;
+  previewOpen: boolean;
   treeWidth: number;
   chatWidth: number;
   sandbox: SandboxWorkspaceState;
@@ -361,6 +362,9 @@ function sanitizeStoredProject(value: unknown): StoredProjectState | null {
     computeScope: value.computeScope === "session" ? "session" : "project",
     sandboxOpen: value.sandboxOpen !== false,
     chatOpen: value.chatOpen !== false,
+    // Defaults to shown: a workspace saved before this field existed must not
+    // open with the editor gone.
+    previewOpen: value.previewOpen !== false,
     treeWidth: boundedNumber(value.treeWidth, 320, 150, 480),
     chatWidth: boundedNumber(value.chatWidth, 640, 280, 720),
     sandbox: {

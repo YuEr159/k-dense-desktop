@@ -142,6 +142,12 @@ export interface SettingsDialogProps {
    */
   panelWidths?: { tree: number; chat: number };
   onPanelWidthChange?: (panel: "tree" | "chat", value: number) => void;
+  /**
+   * Whether the side panes are collapsed. Same ownership rule as the widths,
+   * and the same per-project storage: it is layout, not a browser preference.
+   */
+  panelVisibility?: { tree: boolean; chat: boolean; preview: boolean };
+  onPanelVisibilityChange?: (panel: "tree" | "preview" | "chat", visible: boolean) => void;
 }
 
 export function SettingsDialog({
@@ -150,6 +156,8 @@ export function SettingsDialog({
   request,
   panelWidths,
   onPanelWidthChange,
+  panelVisibility,
+  onPanelVisibilityChange,
 }: SettingsDialogProps) {
   // Skills / prompt templates edited here feed the composer's pickers, which
   // fetch once per project — announce a change when the dialog closes.
@@ -274,6 +282,8 @@ export function SettingsDialog({
               <AppearancePanel
                 panelWidths={panelWidths}
                 onPanelWidthChange={onPanelWidthChange}
+                panelVisibility={panelVisibility}
+                onPanelVisibilityChange={onPanelVisibilityChange}
               />
             </TabsContent>
           </div>

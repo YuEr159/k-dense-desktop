@@ -64,6 +64,7 @@ const projectState: ProjectWorkspaceState = {
   computeScope: "session",
   sandboxOpen: false,
   chatOpen: true,
+  previewOpen: true,
   treeWidth: 280,
   chatWidth: 600,
   sandbox: {

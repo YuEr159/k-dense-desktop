@@ -1,12 +1,21 @@
 "use client";
 
-import { ChevronDownIcon, ChevronUpIcon, MonitorIcon, MoonIcon, SunIcon } from "lucide-react";
+import {
+  ChevronDownIcon,
+  ChevronUpIcon,
+  EyeIcon,
+  EyeOffIcon,
+  MonitorIcon,
+  MoonIcon,
+  SunIcon,
+} from "lucide-react";
 import { useTheme } from "next-themes";
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { LOCALES, useLocale } from "@/lib/i18n/locale";
 import {
+  PANEL_IDS,
   PANEL_WIDTH_RANGE,
   clampPanelWidth,
   usePanelOrder,
@@ -29,9 +38,13 @@ const PANEL_LABELS: Record<PanelId, string> = {
 export function AppearancePanel({
   panelWidths,
   onPanelWidthChange,
+  panelVisibility,
+  onPanelVisibilityChange,
 }: {
   panelWidths?: { tree: number; chat: number };
   onPanelWidthChange?: (panel: "tree" | "chat", value: number) => void;
+  panelVisibility?: { tree: boolean; chat: boolean; preview: boolean };
+  onPanelVisibilityChange?: (panel: PanelId, visible: boolean) => void;
 } = {}) {
   const { theme, setTheme } = useTheme();
   const [locale, setLocale] = useLocale();
@@ -263,36 +276,67 @@ export function AppearancePanel({
       <SettingsCard
         id="panel-order"
         title="Panel order"
-        description="Left to right on wide windows. The side panels can also be swapped by clicking the ends of the divider between them. On narrow windows the layout stays fixed."
+        description="Left to right on wide windows. Toggle a pane's eye to collapse it. On narrow windows the layout stays fixed."
       >
         <ol className="flex flex-col gap-1">
-          {panelOrder.map((id, index) => (
-            <li key={id} className="flex items-center gap-2 rounded-lg border px-3 py-2">
-              <span className="flex-1 text-xs font-medium text-foreground">{PANEL_LABELS[id]}</span>
-              <Button
-                variant="outline"
-                size="sm"
-                className="size-7 p-0"
-                aria-label={`Move ${PANEL_LABELS[id]} left`}
-                title={`Move ${PANEL_LABELS[id]} left`}
-                disabled={index === 0}
-                onClick={() => movePanel(id, -1)}
+          {/* Rows stay in a fixed order — sorted by the pane's own identity, not
+              by its position — so moving a pane never makes the row you just
+              clicked jump out from under the pointer. The arrows and the
+              position label are what change. */}
+          {PANEL_IDS.map((id) => {
+            const index = panelOrder.indexOf(id);
+            const hideable = panelVisibility && onPanelVisibilityChange;
+            const visible = hideable ? panelVisibility[id] : true;
+            return (
+              <li
+                key={id}
+                className={cn(
+                  "flex items-center gap-2 rounded-lg border px-3 py-2",
+                  !visible && "opacity-60",
+                )}
               >
-                <ChevronUpIcon className="size-3.5 rotate-[-90deg]" />
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                className="size-7 p-0"
-                aria-label={`Move ${PANEL_LABELS[id]} right`}
-                title={`Move ${PANEL_LABELS[id]} right`}
-                disabled={index === panelOrder.length - 1}
-                onClick={() => movePanel(id, 1)}
-              >
-                <ChevronDownIcon className="size-3.5 rotate-[-90deg]" />
-              </Button>
-            </li>
-          ))}
+                <span className="flex-1 text-xs font-medium text-foreground">{PANEL_LABELS[id]}</span>
+                <span className="text-[11px] tabular-nums text-muted-foreground">
+                  {index + 1} / {PANEL_IDS.length}
+                </span>
+                {hideable ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="size-7 p-0"
+                    aria-label={visible ? `Hide ${PANEL_LABELS[id]}` : `Show ${PANEL_LABELS[id]}`}
+                    title={visible ? `Hide ${PANEL_LABELS[id]}` : `Show ${PANEL_LABELS[id]}`}
+                    aria-pressed={visible}
+                    onClick={() => onPanelVisibilityChange(id, !visible)}
+                  >
+                    {visible ? <EyeIcon className="size-3.5" /> : <EyeOffIcon className="size-3.5" />}
+                  </Button>
+                ) : null}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="size-7 p-0"
+                  aria-label={`Move ${PANEL_LABELS[id]} left`}
+                  title={`Move ${PANEL_LABELS[id]} left`}
+                  disabled={index === 0}
+                  onClick={() => movePanel(id, -1)}
+                >
+                  <ChevronUpIcon className="size-3.5 rotate-[-90deg]" />
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="size-7 p-0"
+                  aria-label={`Move ${PANEL_LABELS[id]} right`}
+                  title={`Move ${PANEL_LABELS[id]} right`}
+                  disabled={index === panelOrder.length - 1}
+                  onClick={() => movePanel(id, 1)}
+                >
+                  <ChevronDownIcon className="size-3.5 rotate-[-90deg]" />
+                </Button>
+              </li>
+            );
+          })}
         </ol>
         <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
           The preview always takes the leftover width, so it stays the widest
@@ -304,31 +348,28 @@ export function AppearancePanel({
         <SettingsCard
           id="panel-widths"
           title="Panel widths"
-          description="Saved per project. A boundary between two fixed-width panels cannot be dragged — the preview has to be on one side of it — so set those widths here."
+          description="Drag a slider, or drag the divider between the panes. Saved per project."
         >
-          <div className="flex flex-col gap-2">
+          <div className="flex flex-col gap-3">
             {(["tree", "chat"] as const).map((panel) => {
               const range = PANEL_WIDTH_RANGE[panel];
+              const value = panelWidths[panel];
               return (
-                <label key={panel} className="flex items-center gap-3 text-xs">
-                  <span className="w-16 shrink-0 text-muted-foreground">{PANEL_LABELS[panel]}</span>
+                <label key={panel} className="flex flex-col gap-1 text-xs">
+                  <span className="flex items-baseline justify-between">
+                    <span className="text-muted-foreground">{PANEL_LABELS[panel]}</span>
+                    <span className="tabular-nums text-muted-foreground">{value} px</span>
+                  </span>
                   <input
-                    type="number"
-                    className="w-24 rounded border bg-background px-2 py-1 tabular-nums"
+                    type="range"
+                    className="w-full accent-foreground"
                     min={range.min}
                     max={range.max}
                     step={10}
-                    value={panelWidths[panel]}
-                    onChange={(e) => {
-                      const value = Number(e.target.value);
-                      if (Number.isFinite(value)) {
-                        onPanelWidthChange(panel, clampPanelWidth(panel, value));
-                      }
-                    }}
+                    value={value}
+                    aria-label={`${PANEL_LABELS[panel]} width`}
+                    onChange={(e) => onPanelWidthChange(panel, clampPanelWidth(panel, Number(e.target.value)))}
                   />
-                  <span className="text-[11px] text-muted-foreground">
-                    {range.min}–{range.max} px
-                  </span>
                 </label>
               );
             })}

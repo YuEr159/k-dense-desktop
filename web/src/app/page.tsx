@@ -62,9 +62,13 @@ import { useIsomorphicLayoutEffect } from "@/lib/use-isomorphic-layout-effect";
 import {
   DEFAULT_CHAT_WIDTH,
   DEFAULT_TREE_WIDTH,
+  PANEL_HANDLE_WIDTH,
   clampPanelWidth,
+  fitPanelWidths,
   handleTarget,
+  splitPairWidths,
   usePanelOrder,
+  type HandleTarget,
   type PanelId,
 } from "@/lib/panel-order";
 import {
@@ -110,46 +114,39 @@ function defaultTabTitle(index: number): string {
 }
 
 // Thin vertical divider between two panels. The middle band resizes the
-// fixed-width pane beside it; the two ends swap the pair, which is the only
-// thing a boundary between two fixed-width panes can do.
+// fixed-width pane beside it; the two ends swap the pair. Resize is the large
+// target on purpose — swap is the occasional action, resizing is the one
+// people reach for while reading.
 function ResizeHandle({ onMouseDown, onSwap }: {
-  onMouseDown?: (e: React.MouseEvent) => void;
+  onMouseDown: (e: React.MouseEvent) => void;
   onSwap: () => void;
 }) {
-  if (!onMouseDown) {
-    return (
-      <button
-        type="button"
-        onClick={onSwap}
-        aria-label="Swap panels"
-        title="Swap panels"
-        className="group relative z-10 flex w-2 shrink-0 cursor-pointer items-center justify-center bg-border transition-colors hover:bg-blue-400"
-      >
-        <span className="h-8 w-0.5 rounded-full bg-muted-foreground/20 group-hover:bg-white/70 transition-colors" />
-      </button>
-    );
-  }
   return (
-    <div className="group relative z-10 flex w-2 shrink-0 flex-col bg-border transition-colors">
+    <div className="group relative z-10 flex w-2 shrink-0 flex-col bg-border">
+      {/* Highlights come from `muted-foreground`, which is a mid grey in the
+          light theme and a near-white in the dark one, so the same class reads
+          correctly either way. A fixed blue did not. */}
       <button
         type="button"
         onClick={onSwap}
         aria-label="Swap panels"
         title="Swap panels"
-        className="h-[20%] w-full cursor-pointer transition-colors hover:bg-blue-400"
+        className="h-[20%] w-full cursor-pointer transition-colors hover:bg-muted-foreground/30"
       />
+      {/* The grip highlights only from the resize band's own hover, so a
+          pointer over a swap end must not light it up. */}
       <div
-        className="flex flex-1 cursor-col-resize items-center justify-center transition-colors hover:bg-blue-400 active:bg-blue-500"
+        className="group/resize flex flex-1 cursor-col-resize items-center justify-center transition-colors hover:bg-muted-foreground/30 active:bg-muted-foreground/45"
         onMouseDown={onMouseDown}
       >
-        <span className="h-8 w-0.5 rounded-full bg-muted-foreground/20 group-hover:bg-blue-400 transition-colors" />
+        <span className="h-8 w-0.5 rounded-full bg-muted-foreground/25 transition-colors group-hover/resize:bg-muted-foreground" />
       </div>
       <button
         type="button"
         onClick={onSwap}
         aria-label="Swap panels"
         title="Swap panels"
-        className="h-[20%] w-full cursor-pointer transition-colors hover:bg-blue-400"
+        className="h-[20%] w-full cursor-pointer transition-colors hover:bg-muted-foreground/30"
       />
     </div>
   );
@@ -420,8 +417,12 @@ function WorkspacePage({
   const [chatOpen, setChatOpen] = useState(
     () => initialState?.chatOpen ?? true,
   );
+  const [previewOpen, setPreviewOpen] = useState(
+    () => initialState?.previewOpen ?? true,
+  );
   const toggleSandbox = useCallback(() => setSandboxOpen((value) => !value), []);
   const toggleChat = useCallback(() => setChatOpen((value) => !value), []);
+  const togglePreview = useCallback(() => setPreviewOpen((value) => !value), []);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsRequest, setSettingsRequest] = useState<OpenSettingsRequest | null>(null);
 
@@ -629,34 +630,109 @@ function WorkspacePage({
       return next;
     });
   }, [setPanelOrder]);
-  // `preview` has no close control, so it is always one of them.
+  // Which panes are on screen, in the user's order. The preview is the one
+  // pane with no close control in the header, but it can still be collapsed
+  // from Settings — see `previewOpen`.
   const visiblePanels = useMemo(
-    () => panelOrder.filter((id) => (id === "tree" ? sandboxOpen : id === "chat" ? chatOpen : true)),
-    [panelOrder, sandboxOpen, chatOpen],
+    () =>
+      panelOrder.filter((id) =>
+        id === "tree" ? sandboxOpen : id === "chat" ? chatOpen : previewOpen,
+      ),
+    [panelOrder, sandboxOpen, chatOpen, previewOpen],
   );
   const [isResizing, setIsResizing] = useState(false);
-  const dragging = useRef<"tree" | "chat" | null>(null);
+  const dragging = useRef<HandleTarget | null>(null);
   const dragStartX = useRef(0);
   const dragStartWidth = useRef(0);
-  const dragSign = useRef<1 | -1>(1);
+  // A `pair` drag moves width between the two panes rather than growing one:
+  // `dragStartSum` is what they had together, so it stays what they have.
+  const dragStartOtherWidth = useRef(0);
+  // Width of the column area, so a drag cannot starve the preview. Read from
+  // the DOM rather than tracked in state: it changes on window resizes that
+  // React is not otherwise reacting to.
+  const columnsRef = useRef<HTMLDivElement | null>(null);
+  const availableWidth = useCallback(
+    () => columnsRef.current?.getBoundingClientRect().width ?? Number.POSITIVE_INFINITY,
+    [],
+  );
 
-  const startDrag = useCallback((panel: "tree" | "chat", sign: 1 | -1) => (e: React.MouseEvent) => {
+  // Widths saved on a wide window would otherwise follow the user onto a
+  // narrow one and squeeze the preview to a sliver. The shrink is a render-time
+  // derivation, not a write: the stored widths stay what the user picked, so
+  // widening the window again restores them.
+  const [columnArea, setColumnArea] = useState(Number.POSITIVE_INFINITY);
+  useIsomorphicLayoutEffect(() => {
+    const node = columnsRef.current;
+    if (!node) return;
+    const measure = () => setColumnArea(node.getBoundingClientRect().width);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+  const fittedWidths = useMemo(
+    () =>
+      fitPanelWidths(
+        { tree: treeWidth, chat: chatWidth },
+        { tree: sandboxOpen, chat: chatOpen, preview: previewOpen },
+        columnArea,
+      ),
+    [treeWidth, chatWidth, sandboxOpen, chatOpen, previewOpen, columnArea],
+  );
+  const treePx = fittedWidths.tree;
+  const chatPx = fittedWidths.chat;
+  // The preview normally grows into whatever the fixed-width panes leave. With
+  // it collapsed nothing would grow, so the last remaining pane takes the job
+  // and keeps its own width as the floor.
+  const filler = previewOpen ? null : visiblePanels[visiblePanels.length - 1];
+
+  const startDrag = useCallback((target: HandleTarget) => (e: React.MouseEvent) => {
     e.preventDefault();
-    dragging.current = panel;
-    dragSign.current = sign;
+    dragging.current = target;
     dragStartX.current = e.clientX;
-    dragStartWidth.current = panel === "tree" ? treeWidth : chatWidth;
+    // Start from what is on screen, not from the stored preference: on a
+    // narrow window the fit has already shrunk the pane, and starting from the
+    // stored value would make the pane jump on the first pointer move.
+    if (target.kind === "pair") {
+      dragStartWidth.current = target.left === "tree" ? treePx : chatPx;
+      dragStartOtherWidth.current = target.right === "tree" ? treePx : chatPx;
+    } else {
+      dragStartWidth.current = target.panel === "tree" ? treePx : chatPx;
+      dragStartOtherWidth.current = target.panel === "tree" ? (chatOpen ? chatPx : 0) : (sandboxOpen ? treePx : 0);
+    }
     setIsResizing(true);
-  }, [treeWidth, chatWidth]);
+  }, [treePx, chatPx, sandboxOpen, chatOpen]);
 
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
-      if (!dragging.current) return;
-      const delta = (e.clientX - dragStartX.current) * dragSign.current;
-      if (dragging.current === "tree") {
-        setTreeWidth(clampPanelWidth("tree", dragStartWidth.current + delta));
+      const target = dragging.current;
+      if (!target) return;
+      const delta = (e.clientX - dragStartX.current) * (target.kind === "pair" ? 1 : target.sign);
+      if (target.kind === "pair") {
+        // Both panes are fixed width, so this is a split of a fixed total, not
+        // a resize: growing the left pane has to shrink the right one.
+        const split = splitPairWidths(
+          target.left,
+          target.right,
+          dragStartWidth.current + delta,
+          dragStartWidth.current + dragStartOtherWidth.current,
+        );
+        if (target.left === "tree") { setTreeWidth(split.left); setChatWidth(split.right); }
+        else { setChatWidth(split.left); setTreeWidth(split.right); }
+        return;
+      }
+      // The other fixed-width pane keeps its width. `clampPanelWidth` takes off
+      // the preview's floor itself, which is right here because a `single`
+      // target only exists while the preview is on screen. The dividers are
+      // flex children too, so their width has to come off as well or the drag
+      // can push the preview below its floor by exactly that much.
+      const dividers = (visiblePanels.length - 1) * PANEL_HANDLE_WIDTH;
+      const room = availableWidth() - dragStartOtherWidth.current - dividers;
+      if (target.panel === "tree") {
+        setTreeWidth(clampPanelWidth("tree", dragStartWidth.current + delta, room));
       } else {
-        setChatWidth(clampPanelWidth("chat", dragStartWidth.current + delta));
+        setChatWidth(clampPanelWidth("chat", dragStartWidth.current + delta, room));
       }
     };
     const onUp = () => {
@@ -670,6 +746,45 @@ function WorkspacePage({
       document.removeEventListener("mouseup", onUp);
     };
   }, []);
+
+  // The settings slider and the divider drag have to agree. With the preview
+  // on screen the other pane keeps its width and only the preview's floor
+  // limits the value. With the preview collapsed the two panes share the whole
+  // row, so growing one must shrink the other — otherwise the slider would set
+  // a width the layout cannot honour and the neighbour would look stuck.
+  const setPanelWidth = useCallback(
+    (panel: "tree" | "chat", value: number) => {
+      const dividers = Math.max(0, visiblePanels.length - 1) * PANEL_HANDLE_WIDTH;
+      const otherPanel = panel === "tree" ? "chat" : "tree";
+      const otherOpen = otherPanel === "tree" ? sandboxOpen : chatOpen;
+      if (!previewOpen && otherOpen) {
+        const otherWidth = otherPanel === "tree" ? treePx : chatPx;
+        const total = availableWidth() - dividers;
+        const split = splitPairWidths(panel, otherPanel, value, Math.max(total, 0));
+        if (panel === "tree") {
+          setTreeWidth(split.left);
+          setChatWidth(split.right);
+        } else {
+          setChatWidth(split.left);
+          setTreeWidth(split.right);
+        }
+        return;
+      }
+      const other = otherOpen ? (otherPanel === "tree" ? treePx : chatPx) : 0;
+      const room = availableWidth() - other - dividers;
+      if (panel === "tree") setTreeWidth(clampPanelWidth("tree", value, room));
+      else setChatWidth(clampPanelWidth("chat", value, room));
+    },
+    [
+      availableWidth,
+      previewOpen,
+      sandboxOpen,
+      chatOpen,
+      treePx,
+      chatPx,
+      visiblePanels.length,
+    ],
+  );
 
   const projectWorkspaceState = useMemo<ProjectWorkspaceState>(
     () => ({
@@ -687,6 +802,7 @@ function WorkspacePage({
       computeScope,
       sandboxOpen,
       chatOpen,
+      previewOpen,
       treeWidth,
       chatWidth,
       sandbox: sandboxWorkspace,
@@ -695,6 +811,7 @@ function WorkspacePage({
       activeTabId,
       chatOpen,
       chatWidth,
+      previewOpen,
       computeScope,
       sandboxOpen,
       sandboxWorkspace,
@@ -1196,11 +1313,23 @@ function WorkspacePage({
 
       {/* Main content area — three columns: file tree | preview | chat.
           Panels keep a fixed DOM order and are arranged with CSS `order`:
-          reordering nodes would remount ChatTab and drop a live stream. */}
+          reordering nodes would remount ChatTab and drop a live stream.
+          The breakpoint is `lg` (1024px), not `xl`: a half-screen window on a
+          1080p display is 960–1200 CSS px, and at `xl` the whole row layout
+          would silently fall back to the two-row grid — which is what made
+          the reordering look broken in a half-screen browser. */}
       <div
-        className={cn("grid min-h-0 flex-1 overflow-hidden xl:flex", isResizing && "select-none")}
+        ref={columnsRef}
+        className={cn("grid min-h-0 flex-1 overflow-hidden lg:flex", isResizing && "select-none")}
         style={{
-          gridTemplateColumns: sandboxOpen ? `min(${treeWidth}px, 30vw) minmax(0, 1fr)` : "minmax(0, 1fr)",
+          // Narrow layout: tree beside the preview on the first row, chat
+          // spanning the second. Without the preview the first row is just the
+          // tree, so it gets a single column instead of a stranded half-empty
+          // pair.
+          gridTemplateColumns:
+            sandboxOpen && previewOpen
+              ? `min(${treePx}px, 30vw) minmax(0, 1fr)`
+              : "minmax(0, 1fr)",
           gridTemplateRows: chatOpen ? "minmax(0, 1fr) minmax(0, 1fr)" : "minmax(0, 1fr)",
         }}
       >
@@ -1208,8 +1337,13 @@ function WorkspacePage({
         {/* Left: file tree */}
         {isActive && sandboxOpen && (
           <div
-            className="min-h-0 min-w-0 shrink-0 overflow-hidden xl:w-[var(--tree-width)] xl:[order:var(--panel-order)]"
-            style={{ "--tree-width": `${treeWidth}px`, "--panel-order": panelOrder.indexOf("tree") * 2 } as CSSProperties}
+            className={cn(
+              "min-h-0 min-w-0 overflow-hidden lg:[order:var(--panel-order)]",
+              filler === "tree"
+                ? "flex-1 lg:min-w-[var(--tree-width)]"
+                : "shrink-0 lg:w-[var(--tree-width)]",
+            )}
+            style={{ "--tree-width": `${treePx}px`, "--panel-order": panelOrder.indexOf("tree") * 2 } as CSSProperties}
           >
             <FileTreePanel
               tree={sandbox.tree}
@@ -1232,10 +1366,15 @@ function WorkspacePage({
           </div>
         )}
 
-        {/* Middle: file preview with tabs — always shown; it is the pane the
-            side panels make room for (e.g. the LaTeX editor + PDF). */}
+        {/* Middle: file preview with tabs. Normally the flexible pane the
+            side panels make room for (e.g. the LaTeX editor + PDF), but it can
+            be collapsed from Settings. When it is, it stops taking part in the
+            row so the last remaining pane grows into the space instead. */}
         <div
-          className="min-h-0 flex-1 min-w-0 overflow-hidden xl:[order:var(--panel-order)]"
+          className={cn(
+            "min-h-0 min-w-0 overflow-hidden lg:[order:var(--panel-order)]",
+            previewOpen ? "flex-1" : "hidden",
+          )}
           style={{ "--panel-order": panelOrder.indexOf("preview") * 2 } as CSSProperties}
         >
             <FilePreviewPanel
@@ -1289,11 +1428,14 @@ function WorkspacePage({
             collapsed) so background chat streams keep running. */}
         <div
           className={cn(
-            "col-span-full flex min-h-0 min-w-0 flex-col overflow-hidden shrink-0 xl:w-[var(--chat-width)] xl:[order:var(--panel-order)]",
+            "col-span-full flex min-h-0 min-w-0 flex-col overflow-hidden lg:[order:var(--panel-order)]",
             !chatOpen && "hidden",
+            filler === "chat"
+              ? "flex-1 lg:min-w-[var(--chat-width)]"
+              : "shrink-0 lg:w-[var(--chat-width)]",
           )}
           style={{
-            "--chat-width": `${chatWidth}px`,
+            "--chat-width": `${chatPx}px`,
             "--panel-order": panelOrder.indexOf("chat") * 2,
           } as CSSProperties}
         >
@@ -1370,11 +1512,14 @@ function WorkspacePage({
           return (
             <div
               key={`${left}-${right}`}
-              className="hidden xl:flex xl:[order:var(--panel-order)]"
+              className="hidden lg:flex lg:[order:var(--panel-order)]"
               style={{ "--panel-order": panelOrder.indexOf(left) * 2 + 1 } as CSSProperties}
             >
+              {/* Every visible pair names a target — including tree|chat,
+                  where the preview sits at an end and the two fixed-width
+                  panes trade width with each other. */}
               <ResizeHandle
-                onMouseDown={target ? startDrag(target.panel, target.sign) : undefined}
+                onMouseDown={target ? startDrag(target) : () => {}}
                 onSwap={() => swapPanels(left, right)}
               />
             </div>
@@ -1387,9 +1532,15 @@ function WorkspacePage({
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
         request={settingsRequest}
-        panelWidths={{ tree: treeWidth, chat: chatWidth }}
-        onPanelWidthChange={(panel, value) =>
-          panel === "tree" ? setTreeWidth(value) : setChatWidth(value)
+        panelWidths={{ tree: treePx, chat: chatPx }}
+        onPanelWidthChange={setPanelWidth}
+        panelVisibility={{ tree: sandboxOpen, chat: chatOpen, preview: previewOpen }}
+        onPanelVisibilityChange={(panel, visible) =>
+          panel === "tree"
+            ? setSandboxOpen(visible)
+            : panel === "chat"
+              ? setChatOpen(visible)
+              : setPreviewOpen(visible)
         }
       />
     </div>
