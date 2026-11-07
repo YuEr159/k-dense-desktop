@@ -37,6 +37,37 @@
   StrCpy $isForceCurrentInstall "1"
 !macroend
 
+# --- Drop the Back button ------------------------------------------------
+#
+# With the mode page gone the directory page is the first one, so Back has
+# nowhere to go: NSIS greys it out, leaving a dead control that still looks
+# clickable and invites the press that does nothing. Hiding it says the same
+# thing without the false affordance.
+#
+# The page's SHOW callback is where to do it: MUI2 runs it each time the
+# directory page is drawn, after the wizard window and its buttons exist.
+# `MUI_PAGE_CUSTOMFUNCTION_SHOW` is read while `MUI_PAGE_DIRECTORY` expands and
+# undefined right after, and this file is included ahead of the template that
+# declares the page.
+#
+# The guard is required, not defensive: electron-builder builds the uninstaller
+# with a second makensis run that defines BUILD_UNINSTALLER and reuses the same
+# script header. The define is global, so the uninstall welcome page picks it
+# up too and NSIS refuses the call -- "Call must be used with function names
+# starting with `un.` in the uninstall section". Only the installer wants this.
+#
+# Control 3 is Back in the wizard's button row (`$HWNDPARENT`); 0 is `SW_HIDE`,
+# spelled out because WinMessages.nsh is not included at this point. A silent
+# install has no window, so the callback never runs there.
+!ifndef BUILD_UNINSTALLER
+  !define MUI_PAGE_CUSTOMFUNCTION_SHOW kadyHideBackButton
+
+  Function kadyHideBackButton
+    GetDlgItem $0 $HWNDPARENT 3
+    ShowWindow $0 0
+  FunctionEnd
+!endif
+
 # --- Say what the install is doing during the long phase ----------------
 #
 # `before-pack.mjs` keeps the details pane open through the whole install
