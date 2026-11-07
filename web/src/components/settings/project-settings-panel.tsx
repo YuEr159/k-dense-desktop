@@ -594,7 +594,10 @@ function CompactionCard({ projectId }: { projectId: string }) {
         <div data-testid="compaction-settings">
           {(initial.invalid ?? []).length > 0 ? (
             <SettingsError>
-              {`This project's sandbox/.pi/settings.json holds values Pi rejects, so runs will fail until they are fixed: ${(initial.invalid ?? []).join(", ")}. Saving this card does not touch them.`}
+              This project&apos;s sandbox/.pi/settings.json holds values Pi rejects,
+              so runs will fail until they are fixed:{" "}
+              <span className="font-mono">{(initial.invalid ?? []).join(", ")}</span>
+              . Saving this card does not touch them.
             </SettingsError>
           ) : null}
           <div className="flex items-center justify-between gap-3">
@@ -637,7 +640,10 @@ function CompactionCard({ projectId }: { projectId: string }) {
                 />
                 <span className="text-[10px]">
                   {initial.bounds.reserveTokens.min.toLocaleString()}–{initial.bounds.reserveTokens.max.toLocaleString()}
-                  {triggerAt.trim() !== "" ? " · ignored while a trigger is set" : ""}
+                  {/* A sibling text node rather than one interpolated string:
+                      the runtime translator matches whole text nodes, so a
+                      concatenated sentence would stay English. */}
+                  {triggerAt.trim() !== "" ? <> · <span>ignored while a trigger is set</span></> : null}
                 </span>
               </label>
               <label className="grid gap-1 text-[11px] text-muted-foreground">
