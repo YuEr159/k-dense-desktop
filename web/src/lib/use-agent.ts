@@ -113,6 +113,12 @@ export interface ContextUsage {
   contextWindow: number;
   /** Percentage of the current model's context window, null while unmeasured. */
   percent: number | null;
+  /**
+   * Tokens at which this session compacts, when the project sets a trigger.
+   * The usable window is this, not `contextWindow`: a conversation can sit at
+   * 38% of a 1M model and already have compacted once.
+   */
+  compactAt?: number;
 }
 
 export function parseContextUsage(value: unknown): ContextUsage | null {
@@ -121,6 +127,7 @@ export function parseContextUsage(value: unknown): ContextUsage | null {
   const tokens = candidate.tokens;
   const contextWindow = candidate.contextWindow;
   const percent = candidate.percent;
+  const compactAt = candidate.compactAt;
   if (
     typeof contextWindow !== "number" ||
     !Number.isFinite(contextWindow) ||
@@ -131,7 +138,11 @@ export function parseContextUsage(value: unknown): ContextUsage | null {
   ) {
     return null;
   }
-  return { tokens, contextWindow, percent } as ContextUsage;
+  const usable =
+    typeof compactAt === "number" && Number.isFinite(compactAt) && compactAt > 0
+      ? compactAt
+      : undefined;
+  return { tokens, contextWindow, percent, ...(usable !== undefined ? { compactAt: usable } : {}) } as ContextUsage;
 }
 
 type Status = "ready" | "submitted" | "streaming" | "error";

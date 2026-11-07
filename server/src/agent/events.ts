@@ -21,14 +21,23 @@ export interface ClientFrame {
   [k: string]: unknown;
 }
 
-/** Keep Pi's context-utilization shape explicit on the wire. */
-export function contextUsageFrame(usage: ContextUsage | undefined): ClientFrame | null {
+/**
+ * Pi measures usage against the model's whole window, but compaction fires at
+ * `window - reserve`, so a conversation at 38% of a 1M model may already have
+ * compacted once. The trigger travels with the usage so the client can show a
+ * percentage of the space the conversation can actually use.
+ */
+export function contextUsageFrame(
+  usage: ContextUsage | undefined,
+  compactAt?: number | null,
+): ClientFrame | null {
   if (!usage) return null;
   return {
     type: "context_usage",
     tokens: usage.tokens,
     contextWindow: usage.contextWindow,
     percent: usage.percent,
+    ...(typeof compactAt === "number" && compactAt > 0 ? { compactAt } : {}),
   };
 }
 

@@ -90,6 +90,20 @@ it("loads child MCP and mandatory tools with ambient extensions disabled, and me
     expect(prompt.systemPromptOptions.sections.kady_specialist).toContain("contact_supervisor");
     expect(prompt.systemPromptOptions.sections.kady_specialist).toContain("completed, partial, or blocked");
     expect(prompt.systemPromptOptions.sections.kady_delegation).toBeUndefined();
+    expect(prompt.systemPromptOptions.sections.kady_user_instructions).toBeUndefined();
+
+    // The user's own instructions reach a child through the file the lead
+    // wrote: this process cannot see the lead's session overrides.
+    fs.mkdirSync(paths.kadyDir, { recursive: true });
+    fs.writeFileSync(path.join(paths.kadyDir, "instructions.md"), "All statistics in R, never Python.");
+    const withUser = await captured!.extensionRunner!.emitBeforeAgentStart(
+      { messageType: "user", prompt: "Inspect the data" },
+      { cwd: paths.sandbox, customPrompt: "Keep my custom persona." },
+    );
+    expect(withUser.systemPromptOptions.sections.kady_user_instructions).toContain("All statistics in R");
+    // A child never has a person watching, so the unattended framing applies.
+    expect(withUser.systemPromptOptions.sections.kady_user_instructions).toMatch(/nobody is watching/);
+    fs.rmSync(path.join(paths.kadyDir, "instructions.md"));
     const stream = await captured!.agent.streamFunction({ provider: "openrouter", id: "test" } as any, { messages: [] }, {});
     await stream.result();
     expect(provider).toHaveBeenCalledTimes(1);
@@ -118,6 +132,8 @@ it("loads child MCP and mandatory tools with ambient extensions disabled, and me
 it.each([true, false])("keeps child guidance after Pi prompt filtering (inheritProjectContext=%s)", async (inheritProjectContext) => {
   const paths = ensureProjectExists("runtime");
   fs.writeFileSync(path.join(paths.sandbox, "AGENTS.md"), "LAB_CONTEXT_SENTINEL");
+  fs.mkdirSync(paths.kadyDir, { recursive: true });
+  fs.writeFileSync(path.join(paths.kadyDir, "instructions.md"), "All statistics in R, never Python.");
   vi.stubEnv("PI_SUBAGENT_CHILD", "1");
   const { createDefaultChildSessionFactory } = await internal("src/runs/shared/child-session.js");
   const { createChildHooks } = await internal("src/runs/shared/child-hooks.js");
@@ -151,9 +167,13 @@ it.each([true, false])("keeps child guidance after Pi prompt filtering (inheritP
     expect(rendered).toContain("<kady_specialist>");
     expect(rendered).toContain("contact_supervisor");
     expect(rendered).toContain("Status is not a scientific");
+    expect(rendered).toContain("<kady_user_instructions>");
     expect(rendered).not.toContain("<kady_delegation>");
     const next = await captured!.extensionRunner!.emitBeforeAgentStart({ messageType: "user", prompt: "Follow up" }, first.systemPromptOptions);
     expect(next.systemPromptOptions.forceSystemPrompt!.match(/<kady_specialist>/g)).toHaveLength(1);
+    // A frozen prompt turns every section into a string append, so a second
+    // turn must not append the user's instructions again.
+    expect(next.systemPromptOptions.forceSystemPrompt!.match(/<kady_user_instructions>/g)).toHaveLength(1);
     // A new turn starts from the original options, which were not mutated.
     expect(base).not.toHaveProperty("forceSystemPrompt");
     expect(errors).toEqual([]);

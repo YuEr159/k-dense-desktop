@@ -2,9 +2,11 @@
  * the required child extension also loads it in detached Pi runners. */
 import type { BeforeAgentStartEvent } from "@earendil-works/pi-coding-agent";
 
+export type KadyPromptSection = "kady_delegation" | "kady_specialist" | "kady_user_instructions";
+
 export function setSubagentPromptSection(
   event: BeforeAgentStartEvent,
-  section: "kady_delegation" | "kady_specialist",
+  section: KadyPromptSection,
   guidance: string,
 ): void {
   const options = event.systemPromptOptions;
@@ -16,6 +18,25 @@ export function setSubagentPromptSection(
     const block = `<${section}>\n${guidance}\n</${section}>`;
     if (!options.forceSystemPrompt.includes(block)) options.forceSystemPrompt += `\n\n${block}`;
   }
+}
+
+/**
+ * What the user's own instructions mean for a run nobody is watching.
+ *
+ * `messageType: "custom"` covers scheduled runs and completion notices;
+ * `isParentWake` covers a child waking the lead, which travels as a plain user
+ * message. Neither has a person in front of the screen, so an instruction like
+ * "ask me before every edit" would stall the run instead of being followed.
+ */
+export function userInstructionsPreamble(systemInitiated: boolean): string {
+  return systemInitiated
+    ? "The instructions below are the user's standing preferences for this project. " +
+        "This run was started automatically, so nobody is watching: apply them, and for " +
+        "anything they say to confirm, use your own judgement within what they already " +
+        "authorised rather than waiting for an answer."
+    : "The instructions below are the user's own standing requirements for this project. " +
+        "Follow them together with the guidance above; where they add a confirmation or " +
+        "reporting requirement, honour it.";
 }
 
 export const LEAD_DELEGATION_GUIDANCE = `When delegating authorized work, give each specialist a self-contained task

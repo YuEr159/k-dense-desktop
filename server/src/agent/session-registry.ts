@@ -1,4 +1,5 @@
 import { makeSubagentControlExtension, subagentHost } from "./subagent-control.ts";
+import { makeUserInstructionsExtension } from "./project-instructions-extension.ts";
 import { pathToFileURL } from "node:url";
 import { patchSubagents } from "../../scripts/patch-subagents.mjs";
 import { setHostMeter } from "./subagent-host.mjs";
@@ -443,6 +444,10 @@ async function build(
       createToolSearchExtension(),
       createMcpExtension(),
       makeSubagentControlExtension(projectId),
+      // Last: Pi renders `sections` in insertion order and the control factory
+      // above writes `kady_delegation` during the same before_agent_start, so
+      // registering after it keeps the user's instructions underneath Kady's.
+      makeUserInstructionsExtension(paths),
     ],
   });
   await resourceLoader.reload();

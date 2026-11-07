@@ -22,14 +22,26 @@ export function ContextUsageIndicator({
 
   const known = usage.tokens !== null && usage.percent !== null;
   const tokens = usage.tokens ?? 0;
-  const percent = usage.percent ?? 0;
+  // Measured against the space the conversation can use, not the model's whole
+  // window: with a trigger set, a run compacts at `compactAt`, so 38% of a 1M
+  // window can already have compacted once.
+  const usable = usage.compactAt ?? usage.contextWindow;
+  const percent =
+    usage.tokens !== null && usable > 0
+      ? (usage.tokens / usable) * 100
+      : (usage.percent ?? 0);
   const fill = Math.min(100, Math.max(0, percent));
   const critical = known && percent > 90;
   const warning = known && percent > 70;
   const value = known ? `${Math.round(percent)}%` : "?%";
   const ariaLabel = known
-    ? `Model context ${percent.toFixed(1)} percent, ${tokens.toLocaleString()} of ${usage.contextWindow.toLocaleString()} tokens`
-    : `Model context usage awaiting provider measurement, ${usage.contextWindow.toLocaleString()} token window`;
+    ? `Model context ${percent.toFixed(1)} percent, ${tokens.toLocaleString()} of ${usable.toLocaleString()} usable tokens`
+    : `Model context usage awaiting provider measurement, ${usable.toLocaleString()} token usable window`;
+
+  const triggerNote =
+    usage.compactAt !== undefined
+      ? `Compacts at ${formatCompactTokens(usage.compactAt)} tokens.`
+      : "Pi estimates how much of the selected model's context window this conversation currently uses.";
 
   const gauge = (
     <InfoTooltip
@@ -38,11 +50,11 @@ export function ContextUsageIndicator({
           <b>Model context</b>
           <br />
           {known
-            ? `${formatCompactTokens(tokens)} of ${formatCompactTokens(usage.contextWindow)} tokens (${percent.toFixed(1)}%)`
-            : `Awaiting provider measurement · ${formatCompactTokens(usage.contextWindow)} token window`}
+            ? `${formatCompactTokens(tokens)} of ${formatCompactTokens(usable)} usable tokens (${percent.toFixed(1)}%)`
+            : `Awaiting provider measurement · ${formatCompactTokens(usable)} token usable window`}
           <br />
           {known
-            ? "Pi estimates how much of the selected model's context window this conversation currently uses."
+            ? triggerNote
             : "Available after the first model response and temporarily unavailable after compaction."}
         </>
       }

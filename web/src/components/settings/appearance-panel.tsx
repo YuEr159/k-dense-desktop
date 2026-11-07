@@ -40,6 +40,11 @@ import {
   type CloseAction,
 } from "@/lib/shell-settings";
 import { SettingsCard, SettingsError, SettingsHeader } from "./primitives";
+import {
+  setTranscriptView,
+  useTranscriptView,
+  type TranscriptViewMode,
+} from "@/lib/transcript-view";
 
 const PANEL_LABELS: Record<PanelId, string> = {
   tree: "Files",
@@ -92,6 +97,25 @@ export function AppearancePanel({
     { value: "light", label: "Light", icon: SunIcon },
     { value: "dark", label: "Dark", icon: MoonIcon },
     { value: "system", label: "System", icon: MonitorIcon },
+  ];
+
+  const transcriptViewMode = useTranscriptView();
+  const transcriptOptions: { value: TranscriptViewMode; label: string; hint: string }[] = [
+    {
+      value: "compact",
+      label: "Compact",
+      hint: "Reasoning stays folded with no preview — the answers only.",
+    },
+    {
+      value: "standard",
+      label: "Standard",
+      hint: "Reasoning is folded but previews its first line.",
+    },
+    {
+      value: "expanded",
+      label: "Expanded",
+      hint: "Reasoning starts open so you can read the model's reasoning.",
+    },
   ];
 
   const [closeAction, setCloseAction] = useState<CloseAction>(
@@ -399,6 +423,37 @@ export function AppearancePanel({
         <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
           The preview always takes the leftover width, so it stays the widest
           pane wherever it sits.
+        </p>
+      </SettingsCard>
+
+      <SettingsCard
+        id="transcript-view"
+        title="Transcript detail"
+        description="How much of the model's reasoning the chat shows by default. Saved in this browser, not per project."
+      >
+        <div role="radiogroup" aria-label="Transcript detail" className="flex flex-col gap-2">
+          {transcriptOptions.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              role="radio"
+              aria-checked={transcriptViewMode === option.value}
+              onClick={() => setTranscriptView(option.value)}
+              className={`rounded-lg border px-3 py-2 text-left transition-colors ${
+                transcriptViewMode === option.value
+                  ? "border-foreground/30 bg-muted/60"
+                  : "border-transparent hover:bg-muted/40"
+              }`}
+            >
+              <div className="text-xs font-medium">{option.label}</div>
+              <div className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
+                {option.hint}
+              </div>
+            </button>
+          ))}
+        </div>
+        <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+          Tool cards stay folded in every mode — expand them individually.
         </p>
       </SettingsCard>
 

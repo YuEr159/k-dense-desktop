@@ -292,12 +292,27 @@ export interface CompactionSettings {
   enabled: boolean;
   reserveTokens: number;
   keepRecentTokens: number;
+  /**
+   * Start compacting once the conversation reaches this many tokens. Resolved
+   * against each model's window at run time; null keeps the legacy
+   * `reserveTokens` ("keep this much free") semantics.
+   */
+  autoCompactWindow: number | null;
 }
 
+export type CompactionModelOverride = { reserveTokens?: number; keepRecentTokens?: number };
+
 export interface CompactionSettingsResponse extends CompactionSettings {
+  /** Written for each model a child specialist runs on; read back so the card
+   *  can show that the trigger reaches them too. */
+  modelOverrides: Record<string, CompactionModelOverride>;
+  /** Fields Pi's own getter would throw on; every run using them fails.
+   *  Optional because a response from an older backend omits it. */
+  invalid?: string[];
   bounds: {
     reserveTokens: { min: number; max: number };
     keepRecentTokens: { min: number; max: number };
+    autoCompactWindow: { min: number; max: number };
   };
 }
 
@@ -379,4 +394,41 @@ export async function restoreProjectInstructions(id: string): Promise<Instructio
   const res = await apiFetch(`/projects/${encodeURIComponent(id)}/instructions/restore`, { method: "POST" }, id);
   if (!res.ok) throw new Error(`restoreProjectInstructions ${res.status}`);
   return ((await res.json()) as { status: InstructionsStatus }).status;
+}
+
+// ---------------------------------------------------------------------------
+// The user's own standing instructions for a project
+// ---------------------------------------------------------------------------
+
+export interface UserInstructions {
+  text: string;
+  maxLength: number;
+}
+
+export async function getProjectUserInstructions(id: string): Promise<UserInstructions> {
+  const res = await apiFetch(`/projects/${encodeURIComponent(id)}/user-instructions`, {}, id);
+  if (!res.ok) throw new Error(`getProjectUserInstructions ${res.status}`);
+  return (await res.json()) as UserInstructions;
+}
+
+export async function putProjectUserInstructions(
+  id: string,
+  text: string,
+): Promise<UserInstructions> {
+  const res = await apiFetch(
+    `/projects/${encodeURIComponent(id)}/user-instructions`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    },
+    id,
+  );
+  if (!res.ok) {
+    // `.catch` matters: a 400/409 whose body is not JSON would otherwise throw
+    // a SyntaxError and hide the real reason.
+    const body = (await res.json().catch(() => ({}))) as { detail?: string };
+    throw new Error(body.detail || `putProjectUserInstructions ${res.status}`);
+  }
+  return (await res.json()) as UserInstructions;
 }

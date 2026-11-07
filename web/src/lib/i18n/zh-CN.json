@@ -702,7 +702,7 @@
   "Low": "低",
   "LuaLaTeX": "LuaLaTeX",
   "Machine Learning & AI": "机器学习与 AI",
-  "Machine-wide usage, sampled every few seconds. “app” is the Kady backend process.": "整机用量，每隔几秒采样一次。“app”指 Kady 后端进程。",
+  "Machine-wide usage, sampled every few seconds. “app” is the Kady backend process.": "整机用量，每隔几秒采样一次。“应用”指 Kady 后端进程。",
   "Manage providers": "管理提供商",
   "Manage specialists": "管理专家",
   "Markdown (.md)": "Markdown（.md）",
