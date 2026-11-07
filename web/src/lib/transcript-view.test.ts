@@ -4,7 +4,7 @@ import {
   DEFAULT_TRANSCRIPT_VIEW,
   TRANSCRIPT_VIEW_CHANGED_EVENT,
   TRANSCRIPT_VIEW_KEY,
-  firstLinePreview,
+  lastSegmentPreview,
   normalizeTranscriptView,
   readTranscriptView,
   reasoningShowsPreview,
@@ -92,18 +92,39 @@ describe("transcript view storage", () => {
   });
 });
 
-describe("firstLinePreview", () => {
-  it("takes the first non-empty line", () => {
-    expect(firstLinePreview("\n\n  Planning the analysis  \nmore")).toBe("Planning the analysis");
+describe("lastSegmentPreview", () => {
+  it("shows the end of the paragraph being written", () => {
+    expect(lastSegmentPreview("Let me look.\n\nNow comparing medians")).toBe(
+      "Now comparing medians",
+    );
+  });
+
+  // Reasoning grows at the end, so the newest words are the interesting ones.
+  it("keeps the tail when the segment is longer than the cap", () => {
+    const long = "a".repeat(300) + "TAIL";
+    expect(lastSegmentPreview(long, 140)).toBe(`…${long.slice(-140)}`);
+  });
+
+  it("collapses the blank line between paragraphs to the current one", () => {
+    expect(lastSegmentPreview("First para.\n\nSecond\npara.")).toBe("Second para.");
+  });
+
+  it("falls back to the whole text when there is no blank line", () => {
+    expect(lastSegmentPreview("just one line")).toBe("just one line");
   });
 
   it("strips markdown bold markers", () => {
-    expect(firstLinePreview("**Check the data** first")).toBe("Check the data first");
+    expect(lastSegmentPreview("**Check** the columns")).toBe("Check the columns");
   });
 
   it("is empty for empty or blank text", () => {
-    expect(firstLinePreview("")).toBe("");
-    expect(firstLinePreview("   \n\t\n")).toBe("");
+    expect(lastSegmentPreview("")).toBe("");
+    expect(lastSegmentPreview("   \n\t\n")).toBe("");
+  });
+
+  // A trailing blank line must not make the preview look empty.
+  it("ignores trailing whitespace", () => {
+    expect(lastSegmentPreview("Working on it.\n\n")).toBe("Working on it.");
   });
 });
 

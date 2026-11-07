@@ -34,7 +34,7 @@ import { cn } from "@/lib/utils";
 import { workflowScriptAgents } from "@/lib/workflow-script";
 import {
   DEFAULT_TRANSCRIPT_VIEW,
-  firstLinePreview,
+  lastSegmentPreview,
   reasoningShowsPreview,
   reasoningStartsOpen,
   type TranscriptViewMode,
@@ -434,7 +434,7 @@ export function ReasoningBlock({
   // The guard stays first so an empty block renders nothing in every mode.
   if (!reasoning.trim()) return null;
 
-  const preview = reasoningShowsPreview(mode) ? firstLinePreview(reasoning) : "";
+  const preview = reasoningShowsPreview(mode) ? lastSegmentPreview(reasoning) : "";
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
       <CollapsibleTrigger
@@ -453,11 +453,12 @@ export function ReasoningBlock({
             <span className="text-muted-foreground/50" aria-hidden>
               ·
             </span>
-            <span
-              aria-hidden
-              className="min-w-0 truncate text-muted-foreground/80"
-            >
-              {preview}
+            {/* Clipped from the left, not the right: the preview is already the
+                tail of the current paragraph, and `truncate` would cut exactly
+                the newest words this is meant to show. `row-reverse` puts the
+                overflow on the older side while leaving character order alone. */}
+            <span aria-hidden className="flex min-w-0 flex-row-reverse overflow-hidden">
+              <span className="whitespace-nowrap text-muted-foreground/80">{preview}</span>
             </span>
           </>
         ) : null}

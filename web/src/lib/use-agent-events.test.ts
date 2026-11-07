@@ -29,6 +29,36 @@ describe("applyFrameToMessage", () => {
     expect(m.content).toBe("");
   });
 
+  // One assistant message spans a whole turn, so a turn with two tool calls
+  // reasons three times. Merging them into one block read as a single wall of
+  // text detached from the tools each stretch was about.
+  it("keeps each stretch of reasoning with the tool call it preceded", () => {
+    let m = baseMessage();
+    m = applyFrameToMessage(m, { type: "thinking_delta", delta: "First: inspect." }, 1);
+    m = applyFrameToMessage(m, { type: "tool_start", toolCallId: "t1", toolName: "bash" }, 2);
+    m = applyFrameToMessage(m, { type: "tool_end", toolCallId: "t1", toolName: "bash" }, 3);
+    m = applyFrameToMessage(m, { type: "thinking_delta", delta: "Second: compare." }, 4);
+    m = applyFrameToMessage(m, { type: "tool_start", toolCallId: "t2", toolName: "bash" }, 5);
+
+    const shape = (m.segments ?? []).map((s) =>
+      s.type === "reasoning" ? `reasoning:${s.content}` : s.type,
+    );
+    expect(shape).toEqual(["reasoning:First: inspect.", "activity", "reasoning:Second: compare.", "activity"]);
+    // The flat field stays the concatenation for previews and legacy readers.
+    expect(m.reasoning).toBe("First: inspect.Second: compare.");
+  });
+
+  it("extends only the trailing reasoning segment", () => {
+    let m = baseMessage();
+    m = applyFrameToMessage(m, { type: "thinking_delta", delta: "one" }, 1);
+    m = applyFrameToMessage(m, { type: "tool_start", toolCallId: "t1", toolName: "bash" }, 2);
+    m = applyFrameToMessage(m, { type: "thinking_delta", delta: "two" }, 3);
+    m = applyFrameToMessage(m, { type: "thinking_delta", delta: "!" }, 4);
+
+    const reasoning = (m.segments ?? []).filter((s) => s.type === "reasoning");
+    expect(reasoning.map((s) => (s.type === "reasoning" ? s.content : ""))).toEqual(["one", "two!"]);
+  });
+
   it("tracks a tool call from start to completion", () => {
     const running = applyFrameToMessage(
       baseMessage(),

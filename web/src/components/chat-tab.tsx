@@ -1498,6 +1498,9 @@ export const AssistantMessageBody = memo(function AssistantMessageBody({
   const segments = message.segments?.length
     ? message.segments
     : [
+        ...(message.reasoning?.trim()
+          ? [{ type: "reasoning" as const, content: message.reasoning }]
+          : []),
         ...activities.map((activity) => ({
           type: "activity" as const,
           activityId: activity.id,
@@ -1507,6 +1510,21 @@ export const AssistantMessageBody = memo(function AssistantMessageBody({
           : []),
       ];
   for (const [index, segment] of segments.entries()) {
+    if (segment.type === "reasoning") {
+      // Sits where it happened: a turn with two tool calls has three reasoning
+      // stretches, each above the tool it led to, not one merged block.
+      flushChunk();
+      if (segment.content.trim()) {
+        orderedBlocks.push(
+          <ReasoningBlock
+            key={`reasoning-${index}`}
+            reasoning={segment.content}
+            mode={transcriptView}
+          />,
+        );
+      }
+      continue;
+    }
     if (segment.type === "text") {
       flushChunk();
       replyWorkflowScript = workflowScriptsIn(segment.content).at(-1) ?? replyWorkflowScript;
@@ -1530,9 +1548,8 @@ export const AssistantMessageBody = memo(function AssistantMessageBody({
 
   return (
     <>
-      {hasReasoning && (
-        <ReasoningBlock reasoning={message.reasoning ?? ""} mode={transcriptView} />
-      )}
+      {/* Reasoning now renders inside `orderedBlocks`, where it happened; the
+          flat `message.reasoning` is its concatenation for previews/history. */}
       {orderedBlocks}
       {isStreaming && !hasAnything ? (
         <Shimmer className="text-sm" duration={1.5}>

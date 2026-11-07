@@ -87,15 +87,24 @@ export function setTranscriptView(mode: TranscriptViewMode): void {
 }
 
 /**
- * First non-empty line with markdown bold markers stripped.
+ * The tail of the paragraph being written, with markdown bold markers stripped.
  *
- * Kept static rather than tracking the latest completed paragraph while
- * streaming: the text is still growing, and a summary that rewrites itself as
- * tokens arrive is harder to read than one that stays put.
+ * Shows the *end* rather than the beginning because reasoning grows at the end:
+ * the first line is the model clearing its throat ("Let me look at the data"),
+ * while the last one is what it is currently working out. Keeping the last
+ * `maxChars` means a long paragraph shows its newest words instead of sliding
+ * the useful part out of view as the block streams.
  */
-export function firstLinePreview(text: string): string {
-  const line = text.split("\n").find((candidate) => candidate.trim() !== "") ?? "";
-  return line.replaceAll("**", "").trim();
+export function lastSegmentPreview(text: string, maxChars = 140): string {
+  const end = text.trimEnd();
+  if (end === "") return "";
+  // A blank line starts the current paragraph; everything after it is the part
+  // still being written.
+  const gap = end.lastIndexOf("\n\n");
+  const segment = (gap >= 0 ? end.slice(gap + 2) : end).trim() || end.trim();
+  // Markdown line breaks inside one paragraph are visual noise on one line.
+  const oneLine = segment.replace(/\s*\n\s*/g, " ").replaceAll("**", "").trim();
+  return oneLine.length > maxChars ? `…${oneLine.slice(-maxChars)}` : oneLine;
 }
 
 /**

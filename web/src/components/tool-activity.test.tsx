@@ -283,13 +283,25 @@ describe("ReasoningBlock", () => {
     expect(trigger).not.toHaveTextContent("Check the columns first");
   });
 
-  it("previews the first line in standard", () => {
+  it("previews the paragraph being written in standard", () => {
     render(<ReasoningBlock reasoning={reasoning} mode="standard" />);
     const trigger = screen.getByRole("button", { name: "Reasoning" });
     expect(trigger).toHaveAttribute("aria-expanded", "false");
-    // Bold markers would be noise in a one-line preview.
-    expect(trigger).toHaveTextContent("Check the columns first.");
-    expect(trigger).not.toHaveTextContent("compare medians");
+    // Both lines belong to one paragraph (a soft wrap, not a blank line), so
+    // the preview is that paragraph with its bold markers stripped. It is the
+    // newest text on screen while the block streams.
+    expect(trigger).toHaveTextContent("Check the columns first. Then compare medians.");
+  });
+
+  // The point of previewing the tail: the opening is what a reader can already
+  // guess, the end is what the model is working on now.
+  it("previews only the last paragraph once a blank line separates them", () => {
+    render(
+      <ReasoningBlock reasoning={"Opening thought.\n\nNow checking medians."} mode="standard" />,
+    );
+    const trigger = screen.getByRole("button", { name: "Reasoning" });
+    expect(trigger).toHaveTextContent("Now checking medians.");
+    expect(trigger).not.toHaveTextContent("Opening thought");
   });
 
   it("starts open in expanded", () => {
