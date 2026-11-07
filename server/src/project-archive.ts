@@ -279,6 +279,137 @@ function addNotebooks(
   return count + 1;
 }
 
+/**
+ * Child sessions and artifacts pi-subagents wrote next to the parent sessions.
+ *
+ * These live under `sessionsDir` (inside the project) but behind dot-directory
+ * siblings, so `isUserVisible` drops them from the sandbox walk and
+ * `addChatHistory` only reads top-level `*.jsonl`. Excluding them meant a
+ * project export silently lost delegated work — the subagent's own session
+ * (which can hold hundreds of KB of real analysis) and its archived outputs.
+ *
+ * Layout produced by pi-subagents (0.78):
+ *   sessionsDir/<parentBasename>/<runUuid>/run-<n>/session.jsonl
+ *   sessionsDir/subagent-artifacts/<runId>_<agent>_{input.md,output.md,meta.json,transcript.jsonl}
+ *
+ * 8 MiB per file keeps a runaway transcript from dominating the archive; the
+ * manifest records what was skipped so the gap is visible rather than silent.
+ */
+const SUBAGENT_FILE_LIMIT_BYTES = 8 * 1024 * 1024;
+
+function addSubagentRecords(
+  zip: ZipArchive,
+  opts: ProjectArchiveOptions,
+  occupiedRoots: Set<string>,
+): number {
+  const sessionsDir = opts.paths.sessionsDir;
+  if (!fs.existsSync(sessionsDir)) return 0;
+  const root = availableRoot("subagents", occupiedRoots);
+
+  interface RunRecord {
+    runId: string;
+    runs: Array<{ file: string; archived: string }>;
+    skipped: Array<{ file: string; reason: string }>;
+  }
+  const manifest: {
+    version: 1;
+    projectId: string;
+    projectName: string;
+    sessions: Array<{ parentSessionId: string; runs: RunRecord[] }>;
+    artifacts: Array<{ file: string; archived?: string; skipped?: string }>;
+  } = {
+    version: 1,
+    projectId: opts.paths.id,
+    projectName: opts.projectName ?? opts.paths.id,
+    sessions: [],
+    artifacts: [],
+  };
+  let count = 0;
+
+  const addIfArchiveable = (file: string, archived: string):
+    | { ok: true }
+    | { ok: false; reason: string } => {
+    if (!regularFileWithin(sessionsDir, file)) return { ok: false, reason: "unreadable" };
+    let size = 0;
+    try {
+      size = fs.statSync(file).size;
+    } catch {
+      return { ok: false, reason: "unreadable" };
+    }
+    if (size === 0) return { ok: false, reason: "empty" };
+    if (size > SUBAGENT_FILE_LIMIT_BYTES) return { ok: false, reason: "too-large" };
+    addLocalFile(zip, file, archived);
+    count++;
+    return { ok: true };
+  };
+
+  let parentDirs: fs.Dirent[] = [];
+  try {
+    parentDirs = fs.readdirSync(sessionsDir, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+  for (const parent of parentDirs) {
+    if (!parent.isDirectory()) continue;
+    if (parent.name === "subagent-artifacts") continue;
+    const parentDir = path.join(sessionsDir, parent.name);
+    // The directory is named after the parent session's file stem, which is
+    // `<timestamp>_<sessionId>`; the id is what the UI knows.
+    const match = /_([0-9a-f-]{36})$/i.exec(parent.name);
+    const parentSessionId = match ? match[1] : parent.name;
+    const runs: RunRecord[] = [];
+    let runDirs: fs.Dirent[] = [];
+    try {
+      runDirs = fs.readdirSync(parentDir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const runEntry of runDirs) {
+      if (!runEntry.isDirectory()) continue;
+      const runDir = path.join(parentDir, runEntry.name);
+      let stepDirs: fs.Dirent[] = [];
+      try {
+        stepDirs = fs.readdirSync(runDir, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      const record: RunRecord = { runId: runEntry.name, runs: [], skipped: [] };
+      for (const step of stepDirs) {
+        if (!step.isDirectory() || !step.name.startsWith("run-")) continue;
+        const file = path.join(runDir, step.name, "session.jsonl");
+        const archived = `${root}/sessions/${parentSessionId}/${runEntry.name}/${step.name}.jsonl`;
+        const result = addIfArchiveable(file, archived);
+        if (result.ok) record.runs.push({ file, archived });
+        else if (result.reason !== "unreadable") record.skipped.push({ file, reason: result.reason });
+      }
+      if (record.runs.length || record.skipped.length) runs.push(record);
+    }
+    if (runs.length) manifest.sessions.push({ parentSessionId, runs });
+  }
+
+  const artifactsDir = path.join(sessionsDir, "subagent-artifacts");
+  if (fs.existsSync(artifactsDir)) {
+    let files: fs.Dirent[] = [];
+    try {
+      files = fs.readdirSync(artifactsDir, { withFileTypes: true });
+    } catch {
+      files = [];
+    }
+    for (const entry of files) {
+      if (!entry.isFile()) continue;
+      const file = path.join(artifactsDir, entry.name);
+      const archived = `${root}/artifacts/${entry.name}`;
+      const result = addIfArchiveable(file, archived);
+      if (result.ok) manifest.artifacts.push({ file, archived });
+      else if (result.reason !== "unreadable") manifest.artifacts.push({ file, skipped: result.reason });
+    }
+  }
+
+  if (manifest.sessions.length === 0 && manifest.artifacts.length === 0) return 0;
+  zip.append(jsonBuffer(manifest), { name: `${root}/manifest.json` });
+  return count + 1;
+}
+
 export async function buildProjectArchive(
   opts: ProjectArchiveOptions,
 ): Promise<ProjectArchiveResult> {
@@ -300,6 +431,7 @@ export async function buildProjectArchive(
     occupiedRoots,
   );
   entryCount += addChatHistory(archive, completeOpts, occupiedRoots);
+  entryCount += addSubagentRecords(archive, completeOpts, occupiedRoots);
   entryCount += addNotebooks(archive, completeOpts, occupiedRoots);
   return { archive, entryCount };
 }

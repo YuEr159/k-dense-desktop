@@ -214,6 +214,8 @@ function userMessageText(message: unknown): string {
  * know how to render. pi-subagents 0.66 types; `compaction` is Kady's own.
  */
 export const CUSTOM_MESSAGE_DETAIL_KEYS: Record<string, readonly string[]> = {
+  // Kady's own: a detached run that failed after its child already wrote work.
+  subagent_launch_failure: ["runId", "messages", "sessionFile", "toolNames"],
   subagent_supervisor_request: [
     "id",
     "requestId",

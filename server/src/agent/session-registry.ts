@@ -400,6 +400,9 @@ async function build(
         () => holder.session?.model,
         (providerId) => modelRuntime.isUsingOAuth(providerId),
         modelRefAvailable,
+        // Anchors the child-session paths pi-subagents writes next to this
+        // session's own file, so a failed run's leftover work can be found.
+        () => holder.session?.sessionFile,
       ),
       // Over the spend cap, refuse codemode scripts that run models
       // themselves (image generation, classifiers): their cost is unknown

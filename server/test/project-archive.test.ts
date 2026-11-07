@@ -221,6 +221,59 @@ describe("buildProjectArchive", () => {
       .toEqual(["notebook-1", "notes-only"]);
     expect(manifest.sessions[0].annotations).toHaveLength(3);
   });
+
+  it("carries subagent child sessions and artifacts, and still hides other dot-state", async () => {
+    const paths = resolvePaths("default");
+    // pi-subagents writes children under <parentBasename>/<runUuid>/run-<n>/.
+    const parentDir = path.join(
+      paths.sessionsDir,
+      "2026-01-01T00-00-00-000Z_01a1b672-2ab8-76c6-8045-6e04b79bdcde",
+    );
+    const childDir = path.join(parentDir, "6f64286f-e855-4a04-bc97-db065c242c5f", "run-0");
+    fs.mkdirSync(childDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(childDir, "session.jsonl"),
+      JSON.stringify(message("assistant", "fetched 28 hits")) + "\n",
+      "utf-8",
+    );
+    // An empty run (runner died before its first turn) must not be archived.
+    const emptyDir = path.join(parentDir, "a0a7834e-a4b5-4faf-b2cd-6cd190478bb2", "run-0");
+    fs.mkdirSync(emptyDir, { recursive: true });
+    fs.writeFileSync(path.join(emptyDir, "session.jsonl"), "", "utf-8");
+
+    const artifactsDir = path.join(paths.sessionsDir, "subagent-artifacts");
+    fs.mkdirSync(artifactsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(artifactsDir, "6f64286f_literature-researcher_output.md"),
+      "=== A2 === hitCount=28",
+      "utf-8",
+    );
+    // Unrelated dot-state under the sessions dir stays out.
+    fs.writeFileSync(path.join(paths.sessionsDir, "settings.json"), "hidden", "utf-8");
+
+    const buffer = await finishArchive({ paths, projectName: "Archive test", sessions: [] });
+    const zip = new AdmZip(buffer);
+    const names = zip.getEntries().map((entry) => entry.entryName);
+
+    expect(names).toContain(
+      "subagents/sessions/01a1b672-2ab8-76c6-8045-6e04b79bdcde/" +
+        "6f64286f-e855-4a04-bc97-db065c242c5f/run-0.jsonl",
+    );
+    expect(names).toContain("subagents/artifacts/6f64286f_literature-researcher_output.md");
+    expect(names).not.toContain("subagents/sessions/01a1b672-2ab8-76c6-8045-6e04b79bdcde/a0a7834e-a4b5-4faf-b2cd-6cd190478bb2/run-0.jsonl");
+    expect(names).not.toContain(".pi/sessions/settings.json");
+    expect(zipText(
+      zip,
+      "subagents/sessions/01a1b672-2ab8-76c6-8045-6e04b79bdcde/" +
+        "6f64286f-e855-4a04-bc97-db065c242c5f/run-0.jsonl",
+    )).toContain("fetched 28 hits");
+
+    const manifest = JSON.parse(zipText(zip, "subagents/manifest.json"));
+    expect(manifest.sessions).toHaveLength(1);
+    expect(manifest.sessions[0].parentSessionId).toBe("01a1b672-2ab8-76c6-8045-6e04b79bdcde");
+    expect(manifest.artifacts).toHaveLength(1);
+    expect(manifest.artifacts[0].archived).toContain("6f64286f_literature-researcher_output.md");
+  });
 });
 
 describe("GET /sandbox/download-all", () => {
