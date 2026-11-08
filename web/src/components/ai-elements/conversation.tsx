@@ -5,7 +5,7 @@ import type { ComponentProps } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { ArrowDownIcon, DownloadIcon } from "lucide-react";
-import { useCallback } from "react";
+import { useCallback, useEffect } from "react";
 import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
 
 export type ConversationProps = ComponentProps<typeof StickToBottom>;
@@ -19,6 +19,50 @@ export const Conversation = ({ className, ...props }: ConversationProps) => (
     {...props}
   />
 );
+
+/**
+ * Keep the newest line in view when the SCROLL CONTAINER shrinks.
+ *
+ * `use-stick-to-bottom` observes the content, not the box: it re-pins when a
+ * message is appended, but a container that loses height leaves `scrollTop`
+ * where it was and the last lines slide below the fold. Anything above the
+ * composer that grows while the run streams — the pending-queue panel — does
+ * exactly that. Re-pin only while the reader was already at the bottom, so
+ * scrolling back to reread is never yanked away.
+ */
+export const ConversationAutoPin = () => {
+  const { scrollRef, scrollToBottom } = useStickToBottomContext();
+
+  useEffect(() => {
+    const box = scrollRef.current;
+    if (!box || typeof ResizeObserver === "undefined") return;
+
+    // Track whether the reader is following the newest line. This has to be
+    // sampled on scroll, NOT when the resize fires: by then the container has
+    // already shrunk and the same measurement reads "far from the bottom" even
+    // though the reader never moved. Same 70px tolerance the library uses.
+    let pinned = true;
+    const sample = () => {
+      pinned = box.scrollHeight - box.scrollTop - box.clientHeight <= 70;
+    };
+    sample();
+    box.addEventListener("scroll", sample, { passive: true });
+
+    let height = box.clientHeight;
+    const observer = new ResizeObserver(() => {
+      const shrank = box.clientHeight < height;
+      height = box.clientHeight;
+      if (shrank && pinned) void scrollToBottom({ animation: "instant" });
+    });
+    observer.observe(box);
+    return () => {
+      box.removeEventListener("scroll", sample);
+      observer.disconnect();
+    };
+  }, [scrollRef, scrollToBottom]);
+
+  return null;
+};
 
 export type ConversationContentProps = ComponentProps<
   typeof StickToBottom.Content

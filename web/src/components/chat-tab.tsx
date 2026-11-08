@@ -2,6 +2,7 @@
 
 import {
   Conversation,
+  ConversationAutoPin,
   ConversationContent,
   ConversationEmptyState,
   ConversationScrollButton,
@@ -489,7 +490,12 @@ function MessageQueueDisplay({
   if (queue.length === 0 && steering.length === 0 && followUp.length === 0) return null;
 
   return (
-    <div className="absolute bottom-full left-0 right-0 z-10 mb-2">
+    // In the flow, not floating: as an `absolute bottom-full` overlay this
+    // panel covered the last lines of the transcript while a run streamed —
+    // exactly when the reader is watching them. Taking height above the
+    // composer instead pushes the transcript up and keeps it readable.
+    // The cap keeps all three sections together from starving the transcript.
+    <div className="mb-2 max-h-[40vh] overflow-y-auto">
       <div className="overflow-hidden rounded-xl border bg-background shadow-lg">
         {steering.length > 0 && (
           <>
@@ -2477,6 +2483,7 @@ export const ChatTab = forwardRef<ChatTabHandle, ChatTabProps>(function ChatTab(
             ))
           )}
         </ConversationContent>
+        <ConversationAutoPin />
         <ConversationScrollButton />
       </Conversation>
 
