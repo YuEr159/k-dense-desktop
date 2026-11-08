@@ -244,7 +244,7 @@ describe("buildProjectArchive", () => {
     const artifactsDir = path.join(paths.sessionsDir, "subagent-artifacts");
     fs.mkdirSync(artifactsDir, { recursive: true });
     fs.writeFileSync(
-      path.join(artifactsDir, "6f64286f_literature-researcher_output.md"),
+      path.join(artifactsDir, "6f64286f-e855-4a04-bc97-db065c242c5f_literature-researcher_output.md"),
       "=== A2 === hitCount=28",
       "utf-8",
     );
@@ -257,22 +257,137 @@ describe("buildProjectArchive", () => {
 
     expect(names).toContain(
       "subagents/sessions/01a1b672-2ab8-76c6-8045-6e04b79bdcde/" +
-        "6f64286f-e855-4a04-bc97-db065c242c5f/run-0.jsonl",
+        "6f64286f-e855-4a04-bc97-db065c242c5f/run-0/session.jsonl",
     );
-    expect(names).toContain("subagents/artifacts/6f64286f_literature-researcher_output.md");
-    expect(names).not.toContain("subagents/sessions/01a1b672-2ab8-76c6-8045-6e04b79bdcde/a0a7834e-a4b5-4faf-b2cd-6cd190478bb2/run-0.jsonl");
+    expect(names).toContain("subagents/artifacts/6f64286f-e855-4a04-bc97-db065c242c5f_literature-researcher_output.md");
+    expect(names).not.toContain("subagents/sessions/01a1b672-2ab8-76c6-8045-6e04b79bdcde/a0a7834e-a4b5-4faf-b2cd-6cd190478bb2/run-0/session.jsonl");
     expect(names).not.toContain(".pi/sessions/settings.json");
     expect(zipText(
       zip,
       "subagents/sessions/01a1b672-2ab8-76c6-8045-6e04b79bdcde/" +
-        "6f64286f-e855-4a04-bc97-db065c242c5f/run-0.jsonl",
+        "6f64286f-e855-4a04-bc97-db065c242c5f/run-0/session.jsonl",
     )).toContain("fetched 28 hits");
 
-    const manifest = JSON.parse(zipText(zip, "subagents/manifest.json"));
+    // No host path may reach the manifest; the archive is what gets forwarded.
+    const manifestText = zipText(zip, "subagents/manifest.json");
+    expect(manifestText).not.toContain(paths.sessionsDir);
+    expect(manifestText).not.toContain(paths.sandbox);
+
+    const manifest = JSON.parse(manifestText);
     expect(manifest.sessions).toHaveLength(1);
     expect(manifest.sessions[0].parentSessionId).toBe("01a1b672-2ab8-76c6-8045-6e04b79bdcde");
-    expect(manifest.artifacts).toHaveLength(1);
-    expect(manifest.artifacts[0].archived).toContain("6f64286f_literature-researcher_output.md");
+    expect(manifest.sessions[0].runs[0].files).toEqual([
+      "subagents/sessions/01a1b672-2ab8-76c6-8045-6e04b79bdcde/" +
+        "6f64286f-e855-4a04-bc97-db065c242c5f/run-0/session.jsonl",
+    ]);
+  });
+
+  it("drops the cleanup stamp and keeps nested artifact subtrees", async () => {
+    const paths = resolvePaths("default");
+    const parentDir = path.join(
+      paths.sessionsDir,
+      "2026-01-01T00-00-00-000Z_01a1b672-2ab8-76c6-8045-6e04b79bdcde",
+    );
+    fs.mkdirSync(path.join(parentDir, "6f64286f-e855-4a04-bc97-db065c242c5f", "run-0"), { recursive: true });
+
+    const artifactsDir = path.join(paths.sessionsDir, "subagent-artifacts");
+    fs.mkdirSync(path.join(artifactsDir, "progress", "9b20090b"), { recursive: true });
+    // pi-subagents' cleanup throttle stamp: internal bookkeeping, not content.
+    fs.writeFileSync(path.join(artifactsDir, ".last-cleanup"), "1794073319047", "utf-8");
+    fs.writeFileSync(
+      path.join(artifactsDir, "progress", "9b20090b", "progress.md"),
+      "step 1",
+      "utf-8",
+    );
+
+    const buffer = await finishArchive({ paths, projectName: "Archive test", sessions: [] });
+    const zip = new AdmZip(buffer);
+    const names = zip.getEntries().map((entry) => entry.entryName);
+
+    expect(names).not.toContain("subagents/artifacts/.last-cleanup");
+    expect(names).toContain("subagents/artifacts/progress/9b20090b/progress.md");
+  });
+
+  it("attaches artifacts to the parent session that owns them", async () => {
+    const paths = resolvePaths("default");
+    const parentA = "01a1b672-2ab8-76c6-8045-6e04b79bdcde";
+    const parentB = "01a19c50-3599-72cd-8c0f-738673b8a63d";
+    for (const [parent, run] of [[parentA, "6f64286f-e855-4a04-bc97-db065c242c5f"], [parentB, "c8731449-465c-4e73-869f-5a6e120d5d2e"]]) {
+      const dir = path.join(paths.sessionsDir, `2026-01-01T00-00-00-000Z_${parent}`, run, "run-0");
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, "session.jsonl"), JSON.stringify(message("assistant", "x")) + "\n");
+    }
+
+    const artifactsDir = path.join(paths.sessionsDir, "subagent-artifacts");
+    fs.mkdirSync(artifactsDir, { recursive: true });
+    // Each meta names its own run and parent; the siblings carry no metadata and
+    // must be matched by the run id in their file name.
+    fs.writeFileSync(
+      path.join(artifactsDir, "6f64286f-e855-4a04-bc97-db065c242c5f_investigator_meta.json"),
+      JSON.stringify({ runId: "6f64286f-e855-4a04-bc97-db065c242c5f", parentSessionId: parentA }),
+    );
+    fs.writeFileSync(
+      path.join(artifactsDir, "6f64286f-e855-4a04-bc97-db065c242c5f_investigator_output.md"),
+      "A output",
+    );
+    fs.writeFileSync(
+      path.join(artifactsDir, "c8731449-465c-4e73-869f-5a6e120d5d2e_fact-checker_output.md"),
+      "B output",
+    );
+
+    const buffer = await finishArchive({ paths, projectName: "Archive test", sessions: [] });
+    const manifest = JSON.parse(zipText(new AdmZip(buffer), "subagents/manifest.json"));
+
+    const a = manifest.sessions.find((s: { parentSessionId: string }) => s.parentSessionId === parentA);
+    const b = manifest.sessions.find((s: { parentSessionId: string }) => s.parentSessionId === parentB);
+    expect(a.runs[0].artifacts.map((x: { archived: string }) => x.archived)).toEqual([
+      "subagents/artifacts/6f64286f-e855-4a04-bc97-db065c242c5f_investigator_meta.json",
+      "subagents/artifacts/6f64286f-e855-4a04-bc97-db065c242c5f_investigator_output.md",
+    ]);
+    expect(b.runs[0].artifacts.map((x: { archived: string }) => x.archived)).toEqual([
+      "subagents/artifacts/c8731449-465c-4e73-869f-5a6e120d5d2e_fact-checker_output.md",
+    ]);
+    expect(manifest.artifacts).toEqual([]);
+  });
+
+  it("keeps artifacts whose launch id matches no session directory under their parent", async () => {
+    // In production the artifact's run id is the launch id, not the directory
+    // UUID, so a run that died before writing session.jsonl leaves outputs
+    // pointing at a parent whose run list has no matching entry.
+    const paths = resolvePaths("default");
+    const parent = "01a1b672-2ab8-76c6-8045-6e04b79bdcde";
+    const sessionDir = path.join(
+      paths.sessionsDir,
+      `2026-01-01T00-00-00-000Z_${parent}`,
+      "c8731449-465c-4e73-869f-5a6e120d5d2e",
+      "run-0",
+    );
+    fs.mkdirSync(sessionDir, { recursive: true });
+    fs.writeFileSync(path.join(sessionDir, "session.jsonl"), JSON.stringify(message("assistant", "x")) + "\n");
+
+    const artifactsDir = path.join(paths.sessionsDir, "subagent-artifacts");
+    fs.mkdirSync(artifactsDir, { recursive: true });
+    const orphanRun = "9b20090b-597f-4dc5-87f1-588ed42bd256";
+    fs.writeFileSync(
+      path.join(artifactsDir, `${orphanRun}_investigator_meta.json`),
+      JSON.stringify({ runId: orphanRun, parentSessionId: parent }),
+    );
+    fs.writeFileSync(path.join(artifactsDir, `${orphanRun}_investigator_output.md`), "partial work");
+
+    const buffer = await finishArchive({ paths, projectName: "Archive test", sessions: [] });
+    const zip = new AdmZip(buffer);
+    const manifest = JSON.parse(zipText(zip, "subagents/manifest.json"));
+
+    const entry = manifest.sessions.find((s: { parentSessionId: string }) => s.parentSessionId === parent);
+    // Both the meta and its meta-less sibling land under the parent, not dropped.
+    expect(entry.ungrouped.map((x: { archived: string }) => x.archived).sort()).toEqual([
+      `subagents/artifacts/${orphanRun}_investigator_meta.json`,
+      `subagents/artifacts/${orphanRun}_investigator_output.md`,
+    ]);
+    // And both are still in the zip: attribution is metadata, not a filter.
+    const names = zip.getEntries().map((e) => e.entryName);
+    expect(names).toContain(`subagents/artifacts/${orphanRun}_investigator_output.md`);
+    expect(manifest.artifacts).toEqual([]);
   });
 });
 

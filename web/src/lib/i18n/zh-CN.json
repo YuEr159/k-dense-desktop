@@ -233,8 +233,6 @@
   "Collapse": "收起",
   "Collapse entry": "收起条目",
   "Collapse outputs": "收起输出",
-  "Collapse the left file tree to widen the editor and preview.": "收起左侧文件树以加宽编辑器和预览。",
-  "Collapse the right chat panel to widen the editor and preview.": "收起右侧对话面板以加宽编辑器和预览。",
   "Command": "命令",
   "Command output": "命令输出",
   "Commands": "命令",
@@ -1793,5 +1791,9 @@
   "idle": "空闲",
   "1 run": "1 次运行",
   "0 runs": "0 次运行",
-  "2 runs": "2 次运行"
+  "2 runs": "2 次运行",
+  "Hide the file tree to give the other panels more room.": "隐藏文件树，给其他面板腾出空间。",
+  "Hide the preview to give the other panels more room.": "隐藏预览，给其他面板腾出空间。",
+  "Hide the chat to give the other panels more room.": "隐藏对话，给其他面板腾出空间。",
+  "Package the entire sandbox into a {0} for archiving, sharing with collaborators, or your lab notebook.": "把整个沙盒打包成 {0}，用于归档、与协作者分享或存入实验记录本。"
 }

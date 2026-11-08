@@ -98,4 +98,17 @@ describe("multi-node templates", () => {
   it.each(automation)("translates the automation panel: %s", (english, expectedFragment) => {
     expect(translateText(m, english)).toBe(expectedFragment);
   });
+
+  // File-tree toolbar. The tooltip body contains `<kbd>.zip</kbd>`, which
+  // flattenInline turns into a {0} slot — the prose-only key never matched, so
+  // the heading translated while the explanation beside it stayed English.
+  const sandboxToolbar: [string, string][] = [
+    [
+      "Package the entire sandbox into a .zip for archiving, sharing with collaborators, or your lab notebook.",
+      "把整个沙盒打包成 .zip",
+    ],
+  ];
+  it.each(sandboxToolbar)("translates the sandbox toolbar: %s", (english, expectedFragment) => {
+    expect(translateText(m, english)).toContain(expectedFragment);
+  });
 });

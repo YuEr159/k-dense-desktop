@@ -1231,7 +1231,7 @@ function WorkspacePage({
                 <>
                   <b>{sandboxOpen ? "Hide" : "Show"} file browser</b>
                   <br />
-                  Collapse the left file tree to widen the editor and preview.
+                  Hide the file tree to give the other panels more room.
                 </>
               }
             >
@@ -1254,7 +1254,7 @@ function WorkspacePage({
                 <>
                   <b>{previewOpen ? "Hide" : "Show"} preview</b>
                   <br />
-                  Collapse the preview pane to widen the file tree and chat.
+                  Hide the preview to give the other panels more room.
                 </>
               }
             >
@@ -1277,7 +1277,7 @@ function WorkspacePage({
                 <>
                   <b>{chatOpen ? "Hide" : "Show"} chat</b>
                   <br />
-                  Collapse the right chat panel to widen the editor and preview.
+                  Hide the chat to give the other panels more room.
                 </>
               }
             >
