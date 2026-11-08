@@ -111,4 +111,52 @@ describe("multi-node templates", () => {
   it.each(sandboxToolbar)("translates the sandbox toolbar: %s", (english, expectedFragment) => {
     expect(translateText(m, english)).toContain(expectedFragment);
   });
+
+  // `<SettingsLink>` renders as a <button>, and `flattenInline` stops the copy
+  // at a control (CONTROL_TAGS). A sentence wrapping a link therefore reaches
+  // the matcher as two independent strings — the prefix before the button and
+  // the tail after it — and each needs its own entry. Entries written for the
+  // whole sentence never match, which is how these banners shipped in English
+  // while every plain sentence around them translated.
+  const settingsLinkPrefixes: [string, string][] = [
+    [
+      "Modal is not connected. Existing job history remains available; connect a token pair in",
+      "Modal 未连接",
+    ],
+    ["Save a token ID and secret together in", "把令牌 ID 和密钥一起保存到"],
+    ["Configure Modal credentials in", "在以下位置配置 Modal 凭据"],
+    [
+      "Sends that provider's sign-in token instead of an MCP OAuth sign-in, and picks up its refreshes. Sign in under",
+      "发送该提供商的登录令牌",
+    ],
+    ["Sign in to GitHub Copilot in", "登录 GitHub Copilot，位置"],
+    ["{0} schedules are held because the project reached its spend limit.", "个调度已挂起"],
+    ["{0} schedule is held because the project reached its spend limit.", "个调度已挂起"],
+  ];
+  it.each(settingsLinkPrefixes)("translates a SettingsLink prefix: %s", (english, expectedFragment) => {
+    expect(translateText(m, english)).toContain(expectedFragment);
+  });
+
+  // The tails are separate text nodes after the button, so they need entries of
+  // their own; a prefix alone leaves the sentence half-translated.
+  const settingsLinkTails: [string, string][] = [
+    ["to submit or retry jobs.", "以提交或重试任务"],
+    ["to continue.", "以继续"],
+    ["and they resume on their own.", "它们会自行恢复"],
+    ["before approval.", "后再批准"],
+    [". Needs an https URL.", "需要 https URL"],
+  ];
+  it.each(settingsLinkTails)("translates a SettingsLink tail: %s", (english, expectedFragment) => {
+    expect(translateText(m, english)).toContain(expectedFragment);
+  });
+
+  // The spend banner puts `<b>` and a parenthesised amount ahead of the link, so
+  // the flattened prefix carries two slots rather than one.
+  const spendBanner: [string, string][] = [
+    ["{0} ({1}). New runs are blocked.", "新运行已被阻止"],
+    ["{0} ({1}). You're over 80% of the project's cap.", "已超过项目上限的 80%"],
+  ];
+  it.each(spendBanner)("translates the spend banner: %s", (english, expectedFragment) => {
+    expect(translateText(m, english)).toContain(expectedFragment);
+  });
 });

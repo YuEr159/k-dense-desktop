@@ -299,6 +299,42 @@ describe("translateSubtree", () => {
     expect(field.getAttribute("placeholder")).toBe("向 Kady 提问…");
     expect(field.value).toBe("typed text");
   });
+
+  it("translates a sentence wrapped around a SettingsLink on both sides", () => {
+    // `<SettingsLink>` is a <button>, which ENDS the flattened copy. The
+    // sentence reaches the matcher as two independent strings — the prefix
+    // before the button and the tail after it — so both need their own entry.
+    // Entries written for the whole sentence never match, which is how these
+    // banners shipped in English with every plain sentence around them
+    // translated.
+    const host = document.createElement("div");
+    host.innerHTML =
+      "<div>Modal is not connected. Existing job history remains available; connect a token pair in " +
+      "<button>Settings → Services</button> to submit or retry jobs.</div>";
+
+    apply(translateSubtree(host, matcher, noSkip));
+
+    const text = host.textContent ?? "";
+    expect(text).toContain("Modal 未连接。仍可查看现有任务历史");
+    expect(text).toContain("设置 → 服务");
+    expect(text).toContain("以提交或重试任务。");
+    // The link is a control, not copy: it must survive the rewrite.
+    expect(host.querySelector("button")).not.toBeNull();
+  });
+
+  it("translates the spend-limit banner's templated prefix and tail", () => {
+    const host = document.createElement("div");
+    host.innerHTML =
+      "<p>2 schedules are held because the project reached its spend limit. " +
+      "<button>Raise the limit in project settings</button> and they resume on their own.</p>";
+
+    apply(translateSubtree(host, matcher, noSkip));
+
+    const text = host.textContent ?? "";
+    expect(text).toContain("2 个调度已挂起");
+    expect(text).toContain("在项目设置中提高上限");
+    expect(text).toContain("它们会自行恢复。");
+  });
 });
 
 describe("buildMatcher", () => {
