@@ -73,4 +73,29 @@ describe("multi-node templates", () => {
   it.each(customModel)("translates the custom-model card: %s", (english, expectedFragment) => {
     expect(translateText(m, english)).toContain(expectedFragment);
   });
+
+  // Automation panel + Specialist fleet. Both assemble most of their copy from
+  // template literals and lib/automation.ts helpers, which the JSX harvester
+  // cannot see — the same blind spot the mirror card hit. These rows are copied
+  // from the rendered panel.
+  const automation: [string, string][] = [
+    ["1 active specialists", "1 个活跃专家"],
+    ["681s elapsed", "已运行 681 秒"],
+    ["681s elapsed · bash", "已运行 681 秒 · bash"],
+    ["Compute: job-1 · running", "计算：job-1 · 运行中"],
+    ["Inspect investigator", "查看 investigator"],
+    ["Stop investigator and its children?", "停止 investigator 及其子代理？"],
+    ["Request acknowledged.", "请求已受理。"],
+    ["every 6h", "每 6h"],
+    ["once at 1/2/2026, 3:00:00 PM", "一次性，1/2/2026, 3:00:00 PM"],
+    ["last completed", "上次 已完成"],
+    ["3 runs", "3 次运行"],
+    ["2 open decision(s)", "2 个待决事项"],
+    ["Collapse weekly QC", "折叠 weekly QC"],
+    ["running", "运行中"],
+    ["Hide preview", "隐藏预览"],
+  ];
+  it.each(automation)("translates the automation panel: %s", (english, expectedFragment) => {
+    expect(translateText(m, english)).toBe(expectedFragment);
+  });
 });

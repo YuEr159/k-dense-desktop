@@ -33,6 +33,7 @@ import {
 } from "@/lib/modal-jobs";
 import { isJunkFilePath } from "@/lib/utils";
 import {
+  Columns3Icon,
   PanelLeftIcon,
   PanelRightIcon,
   SettingsIcon,
@@ -634,9 +635,9 @@ function WorkspacePage({
       return next;
     });
   }, [setPanelOrder]);
-  // Which panes are on screen, in the user's order. The preview is the one
-  // pane with no close control in the header, but it can still be collapsed
-  // from Settings — see `previewOpen`.
+  // Which panes are on screen, in the user's order. All three are collapsible
+  // from the header toggle group; Settings → Appearance offers the same
+  // switches beside the order controls.
   const visiblePanels = useMemo(
     () =>
       panelOrder.filter((id) =>
@@ -1246,6 +1247,29 @@ function WorkspacePage({
                 )}
               >
                 <PanelLeftIcon className="size-4" />
+              </button>
+            </InfoTooltip>
+            <InfoTooltip
+              content={
+                <>
+                  <b>{previewOpen ? "Hide" : "Show"} preview</b>
+                  <br />
+                  Collapse the preview pane to widen the file tree and chat.
+                </>
+              }
+            >
+              <button
+                onClick={togglePreview}
+                aria-label={previewOpen ? "Hide preview" : "Show preview"}
+                aria-pressed={previewOpen}
+                className={cn(
+                  "rounded-md p-1.5 transition-colors",
+                  previewOpen
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                )}
+              >
+                <Columns3Icon className="size-4" />
               </button>
             </InfoTooltip>
             <InfoTooltip
