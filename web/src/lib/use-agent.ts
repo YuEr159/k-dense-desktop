@@ -51,6 +51,13 @@ export interface ActivityItem {
 
 export type AssistantMessageSegment =
   | { type: "text"; content: string }
+  /**
+   * One stretch of reasoning, placed where it happened. A single assistant
+   * message spans a whole turn, so a turn with two tool calls has three of
+   * these; keeping them separate is what stops three rounds of thinking from
+   * reading as one wall of text above the tools they reasoned about.
+   */
+  | { type: "reasoning"; content: string }
   | { type: "activity"; activityId: string };
 
 // Retained for backwards-compatible imports; citation verification is deferred
@@ -113,6 +120,12 @@ export interface ContextUsage {
   contextWindow: number;
   /** Percentage of the current model's context window, null while unmeasured. */
   percent: number | null;
+  /**
+   * Tokens at which this session compacts, when the project sets a trigger.
+   * The usable window is this, not `contextWindow`: a conversation can sit at
+   * 38% of a 1M model and already have compacted once.
+   */
+  compactAt?: number;
 }
 
 export function parseContextUsage(value: unknown): ContextUsage | null {
@@ -121,6 +134,7 @@ export function parseContextUsage(value: unknown): ContextUsage | null {
   const tokens = candidate.tokens;
   const contextWindow = candidate.contextWindow;
   const percent = candidate.percent;
+  const compactAt = candidate.compactAt;
   if (
     typeof contextWindow !== "number" ||
     !Number.isFinite(contextWindow) ||
@@ -131,7 +145,11 @@ export function parseContextUsage(value: unknown): ContextUsage | null {
   ) {
     return null;
   }
-  return { tokens, contextWindow, percent } as ContextUsage;
+  const usable =
+    typeof compactAt === "number" && Number.isFinite(compactAt) && compactAt > 0
+      ? compactAt
+      : undefined;
+  return { tokens, contextWindow, percent, ...(usable !== undefined ? { compactAt: usable } : {}) } as ContextUsage;
 }
 
 type Status = "ready" | "submitted" | "streaming" | "error";
@@ -176,6 +194,11 @@ function existingSegments(message: ChatMessage): AssistantMessageSegment[] {
   if (message.segments) return message.segments;
   // Compatibility for any message created before ordered segments existed.
   return [
+    // Reasoning came before every activity in the old flat shape, since it was
+    // all lumped above the tool cards.
+    ...(message.reasoning?.trim()
+      ? [{ type: "reasoning" as const, content: message.reasoning }]
+      : []),
     ...(message.activities ?? []).map(
       (activity): AssistantMessageSegment => ({
         type: "activity",
@@ -203,6 +226,28 @@ function appendTextSegment(
   return [...segments, { type: "text", content: text }];
 }
 
+/**
+ * Append reasoning to the segment it belongs to.
+ *
+ * Deltas of one stretch arrive back to back; a tool call or prose between them
+ * starts a new one. Only the trailing segment is extended — anything earlier is
+ * already closed, so a late delta cannot rewrite history that has scrolled by.
+ */
+function appendReasoningSegment(
+  segments: AssistantMessageSegment[],
+  delta: string,
+): AssistantMessageSegment[] {
+  if (!delta) return segments;
+  const last = segments[segments.length - 1];
+  if (last?.type === "reasoning") {
+    return [
+      ...segments.slice(0, -1),
+      { ...last, content: last.content + delta },
+    ];
+  }
+  return [...segments, { type: "reasoning", content: delta }];
+}
+
 /** Apply one SSE frame to the in-progress assistant message. */
 export function applyFrameToMessage(
   message: ChatMessage,
@@ -218,8 +263,14 @@ export function applyFrameToMessage(
         segments: appendTextSegment(existingSegments(message), delta),
       };
     }
-    case "thinking_delta":
-      return { ...message, reasoning: (message.reasoning ?? "") + (frame.delta ?? "") };
+    case "thinking_delta": {
+      const delta = frame.delta ?? "";
+      return {
+        ...message,
+        reasoning: (message.reasoning ?? "") + delta,
+        segments: appendReasoningSegment(existingSegments(message), delta),
+      };
+    }
     case "tool_start": {
       const id = String(frame.toolCallId ?? frame.toolName ?? now);
       const label =

@@ -249,9 +249,13 @@ describe("project compaction settings", () => {
       enabled: true,
       reserveTokens: 16_384,
       keepRecentTokens: 20_000,
+      autoCompactWindow: null,
+      invalid: [],
+      modelOverrides: {},
       bounds: {
-        reserveTokens: { min: 4_000, max: 64_000 },
+        reserveTokens: { min: 4_000, max: 1_000_000 },
         keepRecentTokens: { min: 5_000, max: 200_000 },
+        autoCompactWindow: { min: 4_000, max: 1_000_000 },
       },
     });
   });
@@ -295,5 +299,57 @@ describe("project compaction settings", () => {
     // Reads degrade to defaults rather than failing.
     res = await app.inject({ method: "GET", url: `/projects/${p.id}/compaction`, headers: headers(p.id) });
     expect(res.json()).toMatchObject({ reserveTokens: 16_384 });
+  });
+
+  it("round-trips autoCompactWindow and clears it with null", async () => {
+    const p = createProject({ name: "Trigger" });
+    let res = await app.inject({
+      method: "PUT",
+      url: `/projects/${p.id}/compaction`,
+      headers: headers(p.id),
+      payload: { autoCompactWindow: 400_000 },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ autoCompactWindow: 400_000 });
+
+    // Survives a re-read rather than only living in the response.
+    res = await app.inject({ method: "GET", url: `/projects/${p.id}/compaction`, headers: headers(p.id) });
+    expect(res.json()).toMatchObject({ autoCompactWindow: 400_000 });
+
+    res = await app.inject({
+      method: "PUT",
+      url: `/projects/${p.id}/compaction`,
+      headers: headers(p.id),
+      payload: { autoCompactWindow: null },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ autoCompactWindow: null });
+    // Cleared means removed, not stored as null: Pi's schema has no null.
+    const written = JSON.parse(fs.readFileSync(path.join(resolvePaths(p.id).sandbox, ".pi", "settings.json"), "utf-8"));
+    expect(written.compaction).not.toHaveProperty("autoCompactWindow");
+  });
+
+  it("keeps Pi's modelOverrides intact when writing other keys", async () => {
+    const p = createProject({ name: "Overrides" });
+    const file = path.join(resolvePaths(p.id).sandbox, ".pi", "settings.json");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({
+      compaction: { modelOverrides: { "openrouter/openai/gpt-6-astra": { reserveTokens: 650_000 } } },
+    }));
+
+    const res = await app.inject({
+      method: "PUT",
+      url: `/projects/${p.id}/compaction`,
+      headers: headers(p.id),
+      payload: { autoCompactWindow: 400_000 },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      modelOverrides: { "openrouter/openai/gpt-6-astra": { reserveTokens: 650_000 } },
+    });
+    const written = JSON.parse(fs.readFileSync(file, "utf-8"));
+    expect(written.compaction.modelOverrides).toEqual({
+      "openrouter/openai/gpt-6-astra": { reserveTokens: 650_000 },
+    });
   });
 });

@@ -279,6 +279,244 @@ function addNotebooks(
   return count + 1;
 }
 
+/**
+ * Child sessions and artifacts pi-subagents wrote next to the parent sessions.
+ *
+ * These live under `sessionsDir` (inside the project) but behind dot-directory
+ * siblings, so `isUserVisible` drops them from the sandbox walk and
+ * `addChatHistory` only reads top-level `*.jsonl`. Excluding them meant a
+ * project export silently lost delegated work — the subagent's own session
+ * (which can hold hundreds of KB of real analysis) and its archived outputs.
+ *
+ * Layout produced by pi-subagents (0.78):
+ *   sessionsDir/<parentBasename>/<runUuid>/run-<n>/session.jsonl
+ *   sessionsDir/subagent-artifacts/<runId>_<agent>_{input.md,output.md,meta.json,transcript.jsonl}
+ *
+ * Two ids meet here and they are *not* the same one: the child's own session
+ * UUID names the directory, while the artifacts are prefixed with pi-subagents'
+ * per-launch run id. `_meta.json` is the only file carrying both, which is what
+ * `attachArtifacts` groups on.
+ *
+ * The walk is recursive and dot-files are dropped: pi-subagents writes internal
+ * bookkeeping (`subagent-artifacts/.last-cleanup`, a cleanup throttle stamp) and
+ * may nest `progress/<id>/` or `outputs/<id>/` under the artifacts directory.
+ * A flat `isFile()` pass would ship the stamp and silently lose the subtrees.
+ *
+ * No per-file size cap: `addVisibleSandboxFiles` has none either, and a user's
+ * 270 MB dataset and their 2.5 MB subagent transcript should not have different
+ * rules in the same zip.
+ */
+interface SubagentArtifact {
+  /** Path inside the archive. Absolute host paths never reach the manifest. */
+  archived: string;
+  /** Why a file was not archived; present only on the skipped side. */
+  skipped?: string;
+  /** From `_meta.json`, when this artifact has one. */
+  parentSessionId?: string;
+  runId?: string;
+}
+
+interface SubagentRun {
+  runId: string;
+  files: string[];
+  artifacts: SubagentArtifact[];
+  skipped: string[];
+}
+
+interface SubagentParent {
+  parentSessionId: string;
+  runs: SubagentRun[];
+  /** Artifacts whose `_meta.json` was unreadable or named no parent. */
+  ungrouped: SubagentArtifact[];
+}
+
+/** Read the two fields `_meta.json` that let an artifact find its run. */
+function artifactOwner(file: string): { parentSessionId?: string; runId?: string } {
+  try {
+    const meta = JSON.parse(fs.readFileSync(file, "utf8")) as { runId?: unknown; parentSessionId?: unknown };
+    return {
+      ...(typeof meta.parentSessionId === "string" ? { parentSessionId: meta.parentSessionId } : {}),
+      ...(typeof meta.runId === "string" ? { runId: meta.runId } : {}),
+    };
+  } catch {
+    // Missing, half-written or not JSON: the artifact still ships, ungrouped.
+    return {};
+  }
+}
+
+function addSubagentRecords(
+  zip: ZipArchive,
+  opts: ProjectArchiveOptions,
+  occupiedRoots: Set<string>,
+): number {
+  const sessionsDir = opts.paths.sessionsDir;
+  if (!fs.existsSync(sessionsDir)) return 0;
+  const root = availableRoot("subagents", occupiedRoots);
+
+  const manifest: {
+    version: 1;
+    projectId: string;
+    projectName: string;
+    sessions: SubagentParent[];
+    /** Artifacts whose owning run is unknown; always shipped. */
+    artifacts: SubagentArtifact[];
+    artifactsNote?: string;
+  } = {
+    version: 1,
+    projectId: opts.paths.id,
+    projectName: opts.projectName ?? opts.paths.id,
+    sessions: [],
+    artifacts: [],
+  };
+  let count = 0;
+
+  const addIfArchiveable = (file: string, archived: string):
+    | { ok: true }
+    | { ok: false; reason: string } => {
+    if (!regularFileWithin(sessionsDir, file)) return { ok: false, reason: "unreadable" };
+    let size = 0;
+    try {
+      size = fs.statSync(file).size;
+    } catch {
+      return { ok: false, reason: "unreadable" };
+    }
+    if (size === 0) return { ok: false, reason: "empty" };
+    addLocalFile(zip, file, archived);
+    count++;
+    return { ok: true };
+  };
+
+  /**
+   * Collect `dir` into the archive, keeping relative structure. Dot-files are
+   * skipped at every level, matching `isUserVisible`'s rule for the same tree.
+   */
+  const walkInto = (
+    dir: string,
+    archivedPrefix: string,
+    onFile: (file: string, archived: string) => void,
+  ): void => {
+    let entries: fs.Dirent[] = [];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.name.startsWith(".")) continue;
+      const abs = path.join(dir, entry.name);
+      const archived = `${archivedPrefix}/${entry.name}`;
+      if (entry.isDirectory()) walkInto(abs, archived, onFile);
+      else if (entry.isFile()) onFile(abs, archived);
+    }
+  };
+  let parentDirs: fs.Dirent[] = [];
+  try {
+    parentDirs = fs.readdirSync(sessionsDir, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+  for (const parent of parentDirs) {
+    if (!parent.isDirectory()) continue;
+    if (parent.name === "subagent-artifacts") continue;
+    const parentDir = path.join(sessionsDir, parent.name);
+    // The directory is named after the parent session's file stem, which is
+    // `<timestamp>_<sessionId>`; the id is what the UI knows.
+    const match = /_([0-9a-f-]{36})$/i.exec(parent.name);
+    const parentSessionId = match ? match[1] : parent.name;
+    const runs: SubagentRun[] = [];
+    let runDirs: fs.Dirent[] = [];
+    try {
+      runDirs = fs.readdirSync(parentDir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const runEntry of runDirs) {
+      if (!runEntry.isDirectory() || runEntry.name.startsWith(".")) continue;
+      const runDir = path.join(parentDir, runEntry.name);
+      const record: SubagentRun = { runId: runEntry.name, files: [], artifacts: [], skipped: [] };
+      walkInto(runDir, `${root}/sessions/${parentSessionId}/${runEntry.name}`, (file, archived) => {
+        const result = addIfArchiveable(file, archived);
+        if (result.ok) record.files.push(archived);
+        else if (result.reason !== "unreadable") record.skipped.push(archived);
+      });
+      if (record.files.length || record.skipped.length) runs.push(record);
+    }
+    if (runs.length) manifest.sessions.push({ parentSessionId, runs, ungrouped: [] });
+  }
+
+  // Artifacts are a flat-to-nested tree shared by every parent session, so each
+  // one is matched back to its run. `_meta.json` names `parentSessionId`
+  // outright; its siblings carry the run id as their file-name prefix
+  // (`<runId>_<agent>_output.md`), which is the child-session directory name.
+  const runIndex = new Map<string, { parent: SubagentParent; run: SubagentRun }>();
+  for (const parent of manifest.sessions) {
+    for (const run of parent.runs) runIndex.set(run.runId, { parent, run });
+  }
+  const artifactsDir = path.join(sessionsDir, "subagent-artifacts");
+  // `_meta.json` is the only artifact naming its parent outright, and it can be
+  // visited after its siblings — read the whole directory's metadata first so
+  // every file in a run's set resolves, not just the one holding the meta.
+  const parentByRunId = new Map<string, string>();
+  if (fs.existsSync(artifactsDir)) {
+    walkInto(artifactsDir, "", (file, relative) => {
+      if (!relative.endsWith("_meta.json")) return;
+      const owner = artifactOwner(file);
+      if (owner.runId && owner.parentSessionId) parentByRunId.set(owner.runId, owner.parentSessionId);
+    });
+  }
+  const stray: SubagentArtifact[] = [];
+  if (fs.existsSync(artifactsDir)) {
+    walkInto(artifactsDir, `${root}/artifacts`, (file, archived) => {
+      const result = addIfArchiveable(file, archived);
+      const base = path.basename(file);
+      const owner = base.endsWith("_meta.json") ? artifactOwner(file) : {};
+      const id = owner.runId
+        ?? /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})_/i.exec(base)?.[1];
+      const parentSessionId = owner.parentSessionId ?? (id ? parentByRunId.get(id) : undefined);
+      const entry: SubagentArtifact = {
+        archived,
+        ...(parentSessionId ? { parentSessionId } : {}),
+        ...(id ? { runId: id } : {}),
+      };
+      if (!result.ok) {
+        if (result.reason !== "unreadable") stray.push({ ...entry, skipped: result.reason });
+        return;
+      }
+      // The run directory is the child session's own UUID, a different id from
+      // the run id in the artifact name, so only `_meta.json` links the two.
+      const hit = id ? runIndex.get(id) : undefined;
+      if (hit) {
+        hit.run.artifacts.push(entry);
+        return;
+      }
+      // Known parent but no session file (a launch that died before its first
+      // turn): keep it under that parent rather than dropping the output.
+      const byParent = parentSessionId
+        ? manifest.sessions.find((session) => session.parentSessionId === parentSessionId)
+        : undefined;
+      if (byParent) {
+        byParent.ungrouped.push(entry);
+        return;
+      }
+      stray.push(entry);
+    });
+  }
+
+  if (stray.length) manifest.artifacts = stray;
+  if (manifest.sessions.length === 0 && manifest.artifacts.length === 0) return 0;
+  // Artifact bodies are the child's own record of its work and are copied
+  // verbatim, so a host path in the text is data, not something we introduced.
+  // Say so once, rather than rewriting the record. `count` is what was packed,
+  // so a manifest holding only skipped entries does not earn the note.
+  if (count > 0) {
+    manifest.artifactsNote =
+      "Artifact bodies are the subagent's own transcript and output, copied " +
+      "verbatim; any host paths inside them are part of that record.";
+  }
+  zip.append(jsonBuffer(manifest), { name: `${root}/manifest.json` });
+  return count + 1;
+}
+
 export async function buildProjectArchive(
   opts: ProjectArchiveOptions,
 ): Promise<ProjectArchiveResult> {
@@ -300,6 +538,7 @@ export async function buildProjectArchive(
     occupiedRoots,
   );
   entryCount += addChatHistory(archive, completeOpts, occupiedRoots);
+  entryCount += addSubagentRecords(archive, completeOpts, occupiedRoots);
   entryCount += addNotebooks(archive, completeOpts, occupiedRoots);
   return { archive, entryCount };
 }

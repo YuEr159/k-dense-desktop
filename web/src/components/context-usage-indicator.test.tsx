@@ -16,7 +16,24 @@ describe("ContextUsageIndicator", () => {
 
     expect(screen.getByRole("status")).toHaveTextContent("21%");
     expect(screen.getByRole("status")).toHaveAccessibleName(
-      "Model context 21.0 percent, 42,000 of 200,000 tokens",
+      "Model context 21.0 percent, 42,000 of 200,000 usable tokens",
+    );
+  });
+
+  // The compaction trigger, not the raw window, is what the reader budgets
+  // against: at 150K of a 200K window that compacts at 120K, the gauge is at
+  // 125%, not 75%.
+  it("measures against the compaction trigger when one is known", () => {
+    render(
+      <TooltipProvider>
+        <ContextUsageIndicator
+          usage={{ tokens: 150_000, contextWindow: 200_000, percent: 75, compactAt: 120_000 }}
+        />
+      </TooltipProvider>,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("125%");
+    expect(screen.getByRole("status")).toHaveAccessibleName(
+      "Model context 125.0 percent, 150,000 of 120,000 usable tokens",
     );
   });
 
@@ -30,7 +47,7 @@ describe("ContextUsageIndicator", () => {
     );
     expect(screen.getByRole("status")).toHaveTextContent("?%");
     expect(screen.getByRole("status")).toHaveAccessibleName(
-      "Model context usage awaiting provider measurement, 200,000 token window",
+      "Model context usage awaiting provider measurement, 200,000 token usable window",
     );
 
     rerender(

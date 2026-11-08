@@ -18,7 +18,7 @@ import {
   WrenchIcon,
   XIcon,
 } from "lucide-react";
-import { memo, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 
 import {
   Collapsible,
@@ -32,6 +32,13 @@ import { skillNameFromRead } from "@/lib/skill-invocation";
 import type { ActivityItem } from "@/lib/use-agent";
 import { cn } from "@/lib/utils";
 import { workflowScriptAgents } from "@/lib/workflow-script";
+import {
+  DEFAULT_TRANSCRIPT_VIEW,
+  lastSegmentPreview,
+  reasoningShowsPreview,
+  reasoningStartsOpen,
+  type TranscriptViewMode,
+} from "@/lib/transcript-view";
 
 function ToolIcon({ toolName }: { toolName?: string }) {
   const className = "size-3.5 shrink-0 text-muted-foreground";
@@ -401,18 +408,60 @@ export function ToolActivityList({ activities }: { activities: ActivityItem[] })
   );
 }
 
-/** Collapsible "thinking" disclosure for an assistant message's reasoning. */
-export function ReasoningBlock({ reasoning }: { reasoning: string }) {
-  const [open, setOpen] = useState(false);
+/**
+ * Collapsible "thinking" disclosure for an assistant message's reasoning.
+ *
+ * `mode` changes only the starting state and the collapsed preview. A reader's
+ * own toggle during the session wins: the mode is followed when it actually
+ * changes, not on every render, so reopening one block is not undone by the
+ * next state update.
+ */
+export function ReasoningBlock({
+  reasoning,
+  mode = DEFAULT_TRANSCRIPT_VIEW,
+}: {
+  reasoning: string;
+  mode?: TranscriptViewMode;
+}) {
+  const [open, setOpen] = useState(() => reasoningStartsOpen(mode));
+  const lastMode = useRef(mode);
+  useEffect(() => {
+    if (lastMode.current === mode) return;
+    lastMode.current = mode;
+    setOpen(reasoningStartsOpen(mode));
+  }, [mode]);
+
+  // The guard stays first so an empty block renders nothing in every mode.
   if (!reasoning.trim()) return null;
+
+  const preview = reasoningShowsPreview(mode) ? lastSegmentPreview(reasoning) : "";
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
-      <CollapsibleTrigger className="flex items-center gap-1.5 rounded-md px-1 py-0.5 text-xs text-muted-foreground transition-colors hover:text-foreground">
+      <CollapsibleTrigger
+        // The visible text becomes the model's own words, which is not a stable
+        // name for a screen reader; the label stays "Reasoning".
+        aria-label="Reasoning"
+        className="flex min-w-0 items-center gap-1.5 rounded-md px-1 py-0.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+      >
         <ChevronRightIcon
-          className={cn("size-3 transition-transform", open && "rotate-90")}
+          className={cn("size-3 shrink-0 transition-transform", open && "rotate-90")}
         />
-        <BrainIcon className="size-3.5" />
-        <span>Reasoning</span>
+        <BrainIcon className="size-3.5 shrink-0" />
+        <span className="shrink-0">Reasoning</span>
+        {!open && preview !== "" ? (
+          <>
+            <span className="text-muted-foreground/50" aria-hidden>
+              ·
+            </span>
+            {/* Clipped from the left, not the right: the preview is already the
+                tail of the current paragraph, and `truncate` would cut exactly
+                the newest words this is meant to show. `row-reverse` puts the
+                overflow on the older side while leaving character order alone. */}
+            <span aria-hidden className="flex min-w-0 flex-row-reverse overflow-hidden">
+              <span className="whitespace-nowrap text-muted-foreground/80">{preview}</span>
+            </span>
+          </>
+        ) : null}
       </CollapsibleTrigger>
       <CollapsibleContent>
         {/* The model's reasoning is its own words, like the answer it leads to

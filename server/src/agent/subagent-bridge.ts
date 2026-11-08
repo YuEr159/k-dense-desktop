@@ -37,12 +37,18 @@ import {
 import { resolvePaths } from "../projects.ts";
 import { KADY_PI_AGENT_DIR } from "../config.ts";
 import { recordScheduleOutcome } from "./scheduler-state.ts";
-import { isWithin } from "../sandbox-fs.ts";
+import { apiRelative, isWithin } from "../sandbox-fs.ts";
 import { listAgents, settingsPinnedModels, subagentsPackageDir } from "./agent-files.ts";
 import { isProviderRefusal, providerRefusalGuidance } from "./model-refusal.ts";
 import { isOAuthOnlyProvider, modelReference } from "./models.ts";
 import { isSubscriptionProvider } from "./provider-auth.ts";
 import { applyVerifierDefault } from "./verifier-models.ts";
+import {
+  isRunnerVanishedMessage,
+  recordLaunchFailure,
+  salvageChildSession,
+  type SalvagedChildSession,
+} from "./subagents-diagnostics.ts";
 
 const require_ = createRequire(import.meta.url);
 
@@ -98,6 +104,13 @@ interface AsyncCompletePayload {
   success?: boolean;
   /** The runner's result text ("agent:\noutput"); success output is not kept by pi-subagents. */
   summary?: string;
+  /**
+   * Wall time of the failed run. `buildFailedRepair` sets it at the top level;
+   * the ordinary repair path keeps it per run step instead.
+   */
+  durationMs?: number;
+  /** The run's own temp directory; authoritative for reading its logs. */
+  asyncDir?: string;
   results?: Array<{
     agent?: string;
     model?: string;
@@ -111,6 +124,88 @@ interface AsyncCompletePayload {
 }
 
 const OUTCOME_READ_BYTES = 4_096;
+
+/**
+ * Persist a failed async launch and, when the child left usable work on disk,
+ * point at it.
+ *
+ * Two separate problems motivated this:
+ *  - The launch fails with `0xC0000142` (STATUS_DLL_INIT_FAILED) before any
+ *    JavaScript runs, leaving zero-byte logs and no explanation anywhere. The
+ *    record keeps the environment size, handle count and exit code so a later
+ *    report can tell an env-block overflow from an antivirus block.
+ *  - A run reported "exited or disappeared before writing a result" had in
+ *    fact already written a 284 KB child session. The lead gave up on work
+ *    that existed, because nothing pointed at the file.
+ *
+ * The completion text itself is produced upstream (`buildFailedRepair`, and the
+ * `subagent:async-complete` event fires only *after* the notifier delivered
+ * it), so we cannot rewrite it. What we can do is append our own notice to the
+ * same session, which is what the salvaged-session pointer rides on.
+ */
+function recordAsyncFailure(
+  projectId: string,
+  asyncId: string,
+  payload: AsyncCompletePayload,
+  parentSessionFile: string | undefined,
+): SalvagedChildSession | null {
+  try {
+    const paths = resolvePaths(projectId);
+    const duration = typeof payload.durationMs === "number" ? payload.durationMs : 0;
+    const salvaged = salvageChildSession(parentSessionFile);
+    const notes: string[] = [];
+    if (isRunnerVanishedMessage(payload.summary)) notes.push("runner vanished before writing a result");
+    if (salvaged) notes.push(`${salvaged.messages} child messages on disk: ${salvaged.sessionFile}`);
+    const record = recordLaunchFailure(paths, {
+      runId: asyncId,
+      durationMs: duration,
+      ...(payload.asyncDir ? { asyncDir: payload.asyncDir } : {}),
+      ...(notes.length ? { note: notes.join("; ") } : {}),
+    });
+    if (record?.exitCode !== undefined) {
+      console.warn(
+        `[subagents] async run ${asyncId} failed with exit ${record.exitCode} (${record.exitCodeHex})` +
+          (salvaged ? `; child session salvaged at ${salvaged.sessionFile}` : ""),
+      );
+    }
+    return salvaged;
+  } catch {
+    // Diagnostics never break the ledger that follows.
+    return null;
+  }
+}
+
+/**
+ * Tell the lead that a run it was told had failed left real work behind.
+ *
+ * Deliberately not `triggerTurn`: the completion notice already woke the model,
+ * so this only rides along (as a follow-up once that turn ends) instead of
+ * starting a second billed turn. `display: true` keeps it visible when the
+ * model is not running at all.
+ */
+function announceSalvagedRun(pi: { sendMessage: Function }, sandbox: string, asyncId: string, salvaged: SalvagedChildSession): void {
+  // apiRelative yields forward slashes on every platform; its result starts
+  // with ".." exactly when the file sits outside the sandbox root.
+  const relative = apiRelative(sandbox, salvaged.sessionFile);
+  const inside = !relative.startsWith("..") && !path.isAbsolute(relative);
+  const where = `\`${inside ? relative : salvaged.sessionFile}\``;
+  const tools = salvaged.toolNames.slice(0, 6).join(", ");
+  const text =
+    `Async run ${asyncId} was reported failed, but its child session holds ${salvaged.messages} messages` +
+    (tools ? ` (tools: ${tools})` : "") +
+    ` at ${where}. The work may be complete or partial — read that file before rerunning anything, ` +
+    `and check \`subagent({ action: "status", id: "${asyncId}" })\` for the run's recorded state.`;
+  try {
+    pi.sendMessage({ customType: "subagent_launch_failure", content: text, display: true, details: {
+      runId: asyncId,
+      messages: salvaged.messages,
+      sessionFile: inside ? relative : salvaged.sessionFile,
+      toolNames: salvaged.toolNames.slice(0, 6).join(","),
+    } }, { deliverAs: "followUp" });
+  } catch {
+    // A notice that cannot be delivered must not fail the ledger either.
+  }
+}
 
 /**
  * Readable result text for a schedule fire. A workflow's `summary` is its
@@ -746,6 +841,8 @@ export function makeSubagentLedgerExtension(
   isProviderUsingOAuth: (providerId: string) => boolean = () => false,
   /** Whether a model ref can run now; gates the verifier-model routing. */
   isModelAvailable?: (ref: string) => boolean,
+  /** The parent session's Pi JSONL file, the anchor for child session paths. */
+  getParentSessionFile: () => string | undefined = () => undefined,
 ): ExtensionFactory {
   return (pi) => {
     pi.on("tool_call", async (event, ctx) => {
@@ -929,9 +1026,16 @@ export function makeSubagentLedgerExtension(
     // session file.
     pi.events.on(ASYNC_COMPLETE_EVENT, (data: unknown) => {
       const payload = data as AsyncCompletePayload;
+      const asyncId = payload.runId ?? payload.id;
+      // A failed run is worth recording before the ledger work below: it is the
+      // only place the launch's timing is still known, and pi-subagents deletes
+      // its temp bookkeeping after 30 days.
+      if (asyncId && payload.success === false) {
+        const salvaged = recordAsyncFailure(projectId, asyncId, payload, getParentSessionFile());
+        if (salvaged) announceSalvagedRun(pi, resolvePaths(projectId).sandbox, asyncId, salvaged);
+      }
       recoverSubagentUsage(projectId);
       // Same id precedence pi-subagents uses to match the fire in its history.
-      const asyncId = payload.runId ?? payload.id;
       const outcome = payload.scheduleOrigin?.id && asyncId ? scheduleOutcomeText(projectId, payload) : undefined;
       if (payload.scheduleOrigin?.id && asyncId && outcome) {
         try {

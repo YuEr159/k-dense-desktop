@@ -20,9 +20,13 @@ const compaction: projectsLib.CompactionSettingsResponse = {
   enabled: true,
   reserveTokens: 16000,
   keepRecentTokens: 20000,
+  autoCompactWindow: null,
+  modelOverrides: {},
+  invalid: [],
   bounds: {
-    reserveTokens: { min: 4000, max: 64000 },
+    reserveTokens: { min: 4000, max: 1_000_000 },
     keepRecentTokens: { min: 5000, max: 200000 },
+    autoCompactWindow: { min: 4000, max: 1_000_000 },
   },
 };
 
@@ -40,6 +44,10 @@ beforeEach(() => {
     new Response(JSON.stringify({ totalUsd: 1.5, spentUsd: 1.5 }), { status: 200 }),
   );
   vi.spyOn(projectsLib, "getProjectInstructionsStatus").mockResolvedValue("edited");
+  vi.spyOn(projectsLib, "getProjectUserInstructions").mockResolvedValue({
+    text: "",
+    maxLength: 4_000,
+  });
   vi.spyOn(projectsLib, "getProjectGuardPolicy").mockResolvedValue({
     version: 1,
     protectedPaths: ["user_data/**"],
@@ -83,14 +91,32 @@ describe("ProjectSettingsPanel", () => {
     await user.type(reserve, "100");
     const card = screen.getByTestId("compaction-settings");
     await user.click(within(card).getByRole("button", { name: "Save" }));
-    expect(await within(card).findByRole("alert")).toHaveTextContent(/between 4,000 and 64,000/);
+    expect(await within(card).findByRole("alert")).toHaveTextContent(/between 4,000 and 1,000,000/);
     expect(put).not.toHaveBeenCalled();
 
     await user.clear(reserve);
     await user.type(reserve, "8000");
     await user.click(within(card).getByRole("button", { name: "Save" }));
     await waitFor(() =>
-      expect(put).toHaveBeenCalledWith("p1", { enabled: true, reserveTokens: 8000, keepRecentTokens: 20000 }),
+      expect(put).toHaveBeenCalledWith("p1", {
+        enabled: true,
+        reserveTokens: 8000,
+        keepRecentTokens: 20000,
+        autoCompactWindow: null,
+      }),
+    );
+  });
+
+  it("names the stored fields Pi would reject instead of showing them as healthy", async () => {
+    vi.spyOn(projectsLib, "getProjectCompaction").mockResolvedValue({
+      ...compaction,
+      invalid: ["compaction.reserveTokens"],
+    });
+    render(<ProjectSettingsPanel projectId="p1" />);
+
+    const card = await screen.findByTestId("compaction-settings");
+    expect(within(card).getByRole("alert")).toHaveTextContent(
+      "compaction.reserveTokens",
     );
   });
 
@@ -122,5 +148,26 @@ describe("ProjectSettingsPanel", () => {
     await user.click(await screen.findByRole("button", { name: "Restore defaults" }));
     await waitFor(() => expect(restore).toHaveBeenCalledWith("p1"));
     expect(await screen.findByText(/Up to date/)).toBeInTheDocument();
+  });
+
+  it("saves your instructions without touching the other cards", async () => {
+    const user = userEvent.setup();
+    const put = vi.spyOn(projectsLib, "putProjectUserInstructions").mockResolvedValue({
+      text: "Use R for statistics.",
+      maxLength: 4_000,
+    });
+    const putCompaction = vi.spyOn(projectsLib, "putProjectCompaction");
+    const putGuard = vi.spyOn(projectsLib, "putProjectGuardPolicy");
+    render(<ProjectSettingsPanel projectId="p1" />);
+
+    const field = await screen.findByLabelText("Your instructions");
+    await user.type(field, "Use R for statistics.");
+    const card = document.querySelector("#user-instructions") as HTMLElement;
+    await user.click(within(card).getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(put).toHaveBeenCalledWith("p1", "Use R for statistics."));
+    expect(putCompaction).not.toHaveBeenCalled();
+    expect(putGuard).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
   });
 });

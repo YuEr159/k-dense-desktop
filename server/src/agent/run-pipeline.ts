@@ -145,6 +145,12 @@ export interface OpenRunOptions {
   baseline: RunBaseline;
   session: Pick<PipelineSession, "getContextUsage" | "messages">;
   runId?: string;
+  /**
+   * Token count at which this session will compact, when the project sets one.
+   * Read by the route after the model is chosen, so the published percentage
+   * can be measured against the usable window rather than the whole one.
+   */
+  compactAt?: () => number | null;
   /** Runs first in cleanup on every exit path (route: restore fusion tool set). */
   onCleanup?: () => void;
 }
@@ -171,11 +177,12 @@ class OpenedRunImpl implements OpenedRun {
     readonly claim: RunClaim,
     private readonly session: Pick<PipelineSession, "getContextUsage" | "messages">,
     private readonly onCleanup: (() => void) | undefined,
+    private readonly compactAt: (() => number | null) | undefined,
   ) {}
 
   publishContextUsage(): void {
     if (this.handle.isComplete) return;
-    const frame = contextUsageFrame(contextUsageForClient(this.session));
+    const frame = contextUsageFrame(contextUsageForClient(this.session), this.compactAt?.());
     if (frame) this.handle.publish(frame);
   }
 
@@ -243,7 +250,7 @@ export function openRun(claim: RunClaim, opts: OpenRunOptions): OpenedRun {
     claim.release();
     throw err;
   }
-  return new OpenedRunImpl(handle, runId, claim, opts.session, opts.onCleanup);
+  return new OpenedRunImpl(handle, runId, claim, opts.session, opts.onCleanup, opts.compactAt);
 }
 
 export interface ExecuteRunOptions {

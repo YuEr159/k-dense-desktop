@@ -77,6 +77,8 @@ import {
   listSessions,
 } from "../agent/session-registry.ts";
 import { parseThinkingLevel } from "../agent/thinking.ts";
+import { readCompactionSettings, reserveForWindow } from "../agent/compaction-settings.ts";
+import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import {
   emptySnapshot,
   isBudgetExceeded,
@@ -119,6 +121,43 @@ function expandChatCommand(paths: ReturnType<typeof activePaths>, text: string):
     skills: [...skills.values()],
     templates: expandableTemplates(paths),
   }).text;
+}
+
+/**
+ * Hand this session's compaction trigger to Pi for the coming run.
+ *
+ * The stored `autoCompactWindow` is a token count ("compact once we reach
+ * 400K"); Pi's trigger is `tokens > window - reserveTokens`, so the two are
+ * related by the model's window, which the run may have just changed. A
+ * session-scoped override is used rather than a file write because the file is
+ * shared by every tab and every child process.
+ *
+ * Children are separate processes and cannot see overrides, so the same
+ * numbers also reach them through `compaction.modelOverrides` — written at
+ * subagent launch, in `subagent-control.ts`, again from `reserveForWindow`.
+ */
+function applyCompactionTrigger(session: AgentSession, paths: ReturnType<typeof activePaths>): void {
+  const settings = readCompactionSettings(paths);
+  const window = session.model?.contextWindow;
+  if (settings.autoCompactWindow === null || !window || window <= 0) return;
+  session.settingsManager.applyOverrides({
+    compaction: { reserveTokens: reserveForWindow(settings.autoCompactWindow, window) },
+  });
+}
+
+/**
+ * Where this session will compact, in tokens.
+ *
+ * Read back from the settings Pi actually resolved rather than recomputed:
+ * the route applies the project trigger just before the run, and a session
+ * without one keeps whatever Pi's own default resolves to.
+ */
+function compactAtFor(session: AgentSession): number | null {
+  const window = session.model?.contextWindow;
+  if (!window || window <= 0) return null;
+  const settings = session.settingsManager.getCompactionSettings(session.model ?? undefined);
+  if (!settings.enabled || !settings.reserveTokens) return null;
+  return Math.max(0, window - settings.reserveTokens);
 }
 
 /** Attach one HTTP response to a broker-owned run. Closing the response only
@@ -815,6 +854,9 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
           images: parsedImages.images.map(({ data, mimeType }) => ({ data, mimeType })),
           baseline,
           session,
+          // Lazy: the run is opened before the model is chosen, and the
+          // trigger depends on that model's window.
+          compactAt: () => compactAtFor(session),
           onCleanup: () => {
             if (savedToolNames !== null) {
               session.setActiveToolsByName(savedToolNames);
@@ -899,6 +941,13 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
           if (level) session.setThinkingLevel(level);
           else req.log.warn({ thinkingLevel: body.thinkingLevel }, "ignoring invalid thinkingLevel");
         }
+
+        // The trigger the user set is a token count, but Pi only knows
+        // `reserveTokens` ("keep this much free"), so it is resolved against
+        // the model this run will actually use. Applied per session, per run:
+        // writing it to the shared file instead would make every other tab's
+        // models compact at a point computed for this one.
+        applyCompactionTrigger(session, paths);
 
         // Model selection can change the context window. Refresh the baseline
         // value and publish the configured model's usage before prompt().

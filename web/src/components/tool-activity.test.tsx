@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
-import { ModalJobChip, NotebookEntryChip, ToolActivityList } from "./tool-activity";
+import { ModalJobChip, NotebookEntryChip, ReasoningBlock, ToolActivityList } from "./tool-activity";
 import type { ActivityItem } from "@/lib/use-agent";
 
 const item = (over: Partial<ActivityItem> = {}): ActivityItem => ({
@@ -262,5 +262,71 @@ describe("ModalJobChip", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Open Compute" }));
     expect(onView).toHaveBeenCalledWith(undefined);
+  });
+});
+
+describe("ReasoningBlock", () => {
+  const reasoning = "**Check the columns** first.\nThen compare medians.";
+
+  it("renders nothing without reasoning, in every mode", () => {
+    for (const mode of ["compact", "standard", "expanded"] as const) {
+      const { container, unmount } = render(<ReasoningBlock reasoning="   " mode={mode} />);
+      expect(container).toBeEmptyDOMElement();
+      unmount();
+    }
+  });
+
+  it("stays folded in compact and hides the preview", () => {
+    render(<ReasoningBlock reasoning={reasoning} mode="compact" />);
+    const trigger = screen.getByRole("button", { name: "Reasoning" });
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(trigger).not.toHaveTextContent("Check the columns first");
+  });
+
+  it("previews the paragraph being written in standard", () => {
+    render(<ReasoningBlock reasoning={reasoning} mode="standard" />);
+    const trigger = screen.getByRole("button", { name: "Reasoning" });
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    // Both lines belong to one paragraph (a soft wrap, not a blank line), so
+    // the preview is that paragraph with its bold markers stripped. It is the
+    // newest text on screen while the block streams.
+    expect(trigger).toHaveTextContent("Check the columns first. Then compare medians.");
+  });
+
+  // The point of previewing the tail: the opening is what a reader can already
+  // guess, the end is what the model is working on now.
+  it("previews only the last paragraph once a blank line separates them", () => {
+    render(
+      <ReasoningBlock reasoning={"Opening thought.\n\nNow checking medians."} mode="standard" />,
+    );
+    const trigger = screen.getByRole("button", { name: "Reasoning" });
+    expect(trigger).toHaveTextContent("Now checking medians.");
+    expect(trigger).not.toHaveTextContent("Opening thought");
+  });
+
+  it("starts open in expanded", () => {
+    render(<ReasoningBlock reasoning={reasoning} mode="expanded" />);
+    const trigger = screen.getByRole("button", { name: "Reasoning" });
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText(/compare medians/)).toBeInTheDocument();
+  });
+
+  // The mode is followed when it actually changes: a mode-driven reset on
+  // every render would undo the reader's own toggle.
+  it("follows a mode change on an already mounted block", () => {
+    const { rerender } = render(<ReasoningBlock reasoning={reasoning} mode="standard" />);
+    const before = screen.getByRole("button", { name: "Reasoning" });
+    expect(before).toHaveAttribute("aria-expanded", "false");
+    rerender(<ReasoningBlock reasoning={reasoning} mode="expanded" />);
+    expect(screen.getByRole("button", { name: "Reasoning" })).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("keeps a manual toggle across re-renders in the same mode", () => {
+    const { rerender } = render(<ReasoningBlock reasoning={reasoning} mode="standard" />);
+    fireEvent.click(screen.getByRole("button", { name: "Reasoning" }));
+    expect(screen.getByRole("button", { name: "Reasoning" })).toHaveAttribute("aria-expanded", "true");
+    // Same mode again: nothing should fold it back.
+    rerender(<ReasoningBlock reasoning={reasoning} mode="standard" />);
+    expect(screen.getByRole("button", { name: "Reasoning" })).toHaveAttribute("aria-expanded", "true");
   });
 });

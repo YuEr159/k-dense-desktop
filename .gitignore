@@ -88,3 +88,11 @@ CLAUDE.md
 desktop/resources/icon.icns
 desktop/resources/icon.iconset/
 desktop/test/.tmp-data/
+
+# Unpacked Electron runtime (357 MB of electron.exe and its DLLs), extracted
+# for local desktop testing. Not source.
+/.edist/
+
+# App settings written to DATA_ROOT, which is the repo root when Kady runs from
+# a plain checkout instead of an installed bundle.
+/shell.json

@@ -33,10 +33,18 @@ import { listProjectActivities } from "../project-activity.ts";
 import { modalJobManager } from "../modal/manager.ts";
 import {
   COMPACTION_BOUNDS,
-  readCompactionSettings,
+  invalidCompactionFields,
+  readCompactionState,
+  readModelOverrides,
   validateCompactionPatch,
   writeCompactionSettings,
 } from "../agent/compaction-settings.ts";
+import {
+  MAX_PROJECT_INSTRUCTIONS,
+  readProjectInstructions,
+  validateProjectInstructions,
+  writeProjectInstructions,
+} from "../agent/project-instructions.ts";
 import {
   readGuardPolicy,
   validateGuardPolicyPatch,
@@ -106,7 +114,14 @@ export async function registerProjectRoutes(app: FastifyInstance): Promise<void>
       reply.code(404);
       return { detail: "Project not found" };
     }
-    return { ...readCompactionSettings(resolvePaths(req.params.projectId)), bounds: COMPACTION_BOUNDS };
+    const paths = resolvePaths(req.params.projectId);
+    const state = readCompactionState(paths);
+    return {
+      ...state.settings,
+      invalid: state.invalid,
+      modelOverrides: readModelOverrides(paths),
+      bounds: COMPACTION_BOUNDS,
+    };
   });
 
   app.put<{ Params: { projectId: string } }>("/projects/:projectId/compaction", async (req, reply) => {
@@ -120,16 +135,25 @@ export async function registerProjectRoutes(app: FastifyInstance): Promise<void>
       return { detail: error };
     }
     const body = (req.body ?? {}) as Record<string, unknown>;
-    const written = writeCompactionSettings(resolvePaths(req.params.projectId), {
+    const paths = resolvePaths(req.params.projectId);
+    const written = writeCompactionSettings(paths, {
       ...(typeof body.enabled === "boolean" ? { enabled: body.enabled } : {}),
       ...(typeof body.reserveTokens === "number" ? { reserveTokens: body.reserveTokens } : {}),
       ...(typeof body.keepRecentTokens === "number" ? { keepRecentTokens: body.keepRecentTokens } : {}),
+      ...("autoCompactWindow" in body
+        ? { autoCompactWindow: body.autoCompactWindow === null ? null : Number(body.autoCompactWindow) }
+        : {}),
     });
     if (!written) {
       reply.code(409);
       return { detail: "sandbox/.pi/settings.json is not valid JSON; fix it before changing compaction settings" };
     }
-    return { ...written, bounds: COMPACTION_BOUNDS };
+    return {
+      ...written,
+      invalid: invalidCompactionFields(written),
+      modelOverrides: readModelOverrides(paths),
+      bounds: COMPACTION_BOUNDS,
+    };
   });
 
   // Raw-data guard policy (sandbox/.kady/policy.json; read by lead and children).
@@ -172,6 +196,42 @@ export async function registerProjectRoutes(app: FastifyInstance): Promise<void>
     const paths = resolvePaths(req.params.projectId);
     restoreAgentsMd(paths);
     return { status: agentsMdStatus(paths) };
+  });
+
+  // The user's own standing instructions (`sandbox/.kady/instructions.md`).
+  // Distinct from `/instructions` above, which reports the shipped AGENTS.md.
+  app.get<{ Params: { projectId: string } }>("/projects/:projectId/user-instructions", async (req, reply) => {
+    if (!getProject(req.params.projectId)) {
+      reply.code(404);
+      return { detail: "Project not found" };
+    }
+    return {
+      text: readProjectInstructions(resolvePaths(req.params.projectId)),
+      maxLength: MAX_PROJECT_INSTRUCTIONS,
+    };
+  });
+
+  app.put<{ Params: { projectId: string } }>("/projects/:projectId/user-instructions", async (req, reply) => {
+    if (!getProject(req.params.projectId)) {
+      reply.code(404);
+      return { detail: "Project not found" };
+    }
+    const text = (req.body as Record<string, unknown> | null)?.text;
+    const error = validateProjectInstructions(text);
+    if (error) {
+      reply.code(400);
+      return { detail: error };
+    }
+    const paths = resolvePaths(req.params.projectId);
+    try {
+      writeProjectInstructions(paths, text as string);
+    } catch (exc) {
+      // Report why: an unwritable directory and a full disk need different
+      // fixes, and both would otherwise read as "save failed".
+      reply.code(409);
+      return { detail: (exc as Error).message };
+    }
+    return { text: readProjectInstructions(paths), maxLength: MAX_PROJECT_INSTRUCTIONS };
   });
 
   app.get<{ Params: { projectId: string } }>("/projects/:projectId/costs", async (req) => {

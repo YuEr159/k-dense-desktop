@@ -32,6 +32,9 @@ export function systemCardKind(customType: string | undefined, content?: string)
   switch (customType) {
     case "subagent_supervisor_request":
       return { label: "Subagent needs a decision", Icon: MessageCircleQuestionIcon, tone: "info" };
+    // Kady's own: a run reported as failed left a usable child session behind.
+    case "subagent_launch_failure":
+      return { label: "Subagent run failed, work salvaged", Icon: ShieldAlertIcon, tone: "warning" };
     case "subagent_watchdog_warning":
       return { label: "Watchdog warning", Icon: ShieldAlertIcon, tone: "warning" };
     case "subagent-notify":
@@ -87,8 +90,10 @@ const DETAIL_LABELS: Record<string, string> = {
   stalemateRepeats: "Repeats",
   sessionLabel: "Session",
   handoffPath: "Result",
+  sessionFile: "Child session",
+  messages: "Messages",
 };
-const MONO_DETAILS = new Set(["runId", "handoffPath"]);
+const MONO_DETAILS = new Set(["runId", "handoffPath", "sessionFile"]);
 
 export const COLLAPSE_AFTER_LINES = 8;
 export const COLLAPSE_AFTER_CHARS = 600;

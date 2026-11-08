@@ -14,8 +14,50 @@ import { webAccessPackageDir } from "./web-access-bridge.ts";
 import { LEAD_DELEGATION_GUIDANCE, setSubagentPromptSection, verifierModelGuidance } from "./subagent-prompts.ts";
 import { routedVerifiers } from "./verifier-models.ts";
 import { resolvePaths } from "../projects.ts";
+import {
+  modelOverrideKey,
+  readCompactionSettings,
+  reserveForWindow,
+  writeModelReserveTokens,
+} from "./compaction-settings.ts";
 
 type Rec = Record<string, any>;
+
+/**
+ * Leave the user's compaction trigger where a child process will find it.
+ *
+ * `contract.model` is a `provider/id` reference, not a Pi `Model`, so the
+ * window behind it has to be looked up again. Anything unresolvable is skipped
+ * rather than guessed: a child on Pi's default trigger costs more context than
+ * asked, but a child on a window from the wrong model can compact on every
+ * turn.
+ */
+function recordChildCompactionTrigger(
+  projectId: string,
+  ctx: ExtensionContext,
+  ref: unknown,
+): void {
+  if (typeof ref !== "string") return;
+  // First slash separates provider from id; the rest belongs to the id
+  // (`openrouter/openai/gpt-6-astra`).
+  const slash = ref.indexOf("/");
+  if (slash <= 0) return;
+  const model = ctx.modelRegistry.find(ref.slice(0, slash), ref.slice(slash + 1));
+  if (!model || !model.contextWindow || model.contextWindow <= 0) return;
+  const paths = resolvePaths(projectId);
+  const { autoCompactWindow } = readCompactionSettings(paths);
+  if (autoCompactWindow === null) return;
+  try {
+    writeModelReserveTokens(
+      paths,
+      modelOverrideKey(model.provider, model.id),
+      reserveForWindow(autoCompactWindow, model.contextWindow),
+    );
+  } catch {
+    // The file is malformed or unwritable. Children fall back to Pi's default
+    // trigger; a launch that otherwise works must not fail over a setting.
+  }
+}
 interface Host { rpc(method: string, params?: Rec): Promise<Rec>; preflight(input: Rec): Promise<unknown>; refreshSchedules(): void; }
 const hosts = new Map<string, Host>();
 /**
@@ -118,13 +160,21 @@ export function makeSubagentControlExtension(projectId: string): ExtensionFactor
       if (event.toolName !== "subagent" || event.input.action || !ctx) return;
       ceiling?.update(policy());
       const targets = workflowCallTargets(event.input, { toolCallId: event.toolCallId, sessionManager: ctx.sessionManager, cwd: ctx.cwd });
+      if (!targets || targets.dynamic) return;
       // Public preflight supplies early, readable configuration failures. Actual
       // provider admission remains authoritative for computed/file workflows.
-      if (targets && !targets.dynamic && targets.models.size === 0) {
-        for (const agent of targets.agents) {
-          const result = await preflight({ agent, model: event.input.model });
-          if (!result.ok) return { block: true, reason: result.message };
+      //
+      // Every launch also records the compaction trigger its model needs, not
+      // just the ones that need validating: a child runs in its own process
+      // and cannot see this session's overrides, so the only way to give it the
+      // user's trigger is to leave it in the shared settings file beforehand.
+      for (const agent of targets.agents) {
+        const result = await preflight({ agent, model: event.input.model });
+        if (!result.ok) {
+          if (targets.models.size === 0) return { block: true, reason: result.message };
+          continue;
         }
+        recordChildCompactionTrigger(projectId, ctx, (result.contract as { model?: unknown }).model);
       }
     });
     pi.on("session_shutdown", () => {

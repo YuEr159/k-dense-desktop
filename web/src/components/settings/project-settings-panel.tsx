@@ -16,8 +16,10 @@ import {
   getProjectCompaction,
   getProjectGuardPolicy,
   getProjectInstructionsStatus,
+  getProjectUserInstructions,
   putProjectCompaction,
   putProjectGuardPolicy,
+  putProjectUserInstructions,
   restoreProjectInstructions,
   type CompactionSettingsResponse,
   type GuardPolicy,
@@ -228,6 +230,97 @@ const INSTRUCTIONS_TEXT: Record<InstructionsStatus, string> = {
   missing: "Missing — the agent runs without its sandbox instructions.",
 };
 
+/**
+ * The user's own standing requirements, appended to the end of the system
+ * prompt on every run — lead and specialists alike.
+ *
+ * Distinct from the AGENTS.md card below, which reports a file Kady ships and
+ * the user edits outside the app. This one is theirs alone and is edited here.
+ */
+function UserInstructionsCard({ projectId }: { projectId: string }) {
+  const [text, setText] = useState("");
+  const [initial, setInitial] = useState("");
+  const [maxLength, setMaxLength] = useState(4_000);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    getProjectUserInstructions(projectId)
+      .then((value) => {
+        if (cancelled) return;
+        setInitial(value.text);
+        setText(value.text);
+        setMaxLength(value.maxLength);
+      })
+      .catch((cause) => {
+        if (!cancelled) setError(cause instanceof Error ? cause.message : "Failed to load");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
+
+  const dirty = text !== initial;
+
+  const save = async () => {
+    setError(null);
+    setSaved(false);
+    setSaving(true);
+    try {
+      const value = await putProjectUserInstructions(projectId, text);
+      setInitial(value.text);
+      setText(value.text);
+      setMaxLength(value.maxLength);
+      setSaved(true);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Save failed");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <SettingsCard
+      id="user-instructions"
+      title="Your instructions"
+      description="Added to the end of the system prompt on every run in this project, after Kady's own guidance. Specialists get it too. Leave it empty to add nothing."
+    >
+      <Textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        disabled={loading}
+        aria-label="Your instructions"
+        placeholder="For example: report every statistical test with its effect size and confidence interval. Use R, not Python, for statistics."
+        className="min-h-32 text-xs"
+      />
+      <div className="mt-1 flex items-center justify-between text-[10px] text-muted-foreground">
+        <span>Applies to new runs; a chat already streaming keeps the prompt it started with.</span>
+        <span className={`tabular-nums ${text.length > maxLength ? "text-destructive" : ""}`}>
+          {text.length.toLocaleString()} / {maxLength.toLocaleString()}
+        </span>
+      </div>
+      <CardActions
+        dirty={dirty}
+        saving={saving}
+        saved={saved}
+        error={error}
+        onDiscard={() => {
+          setText(initial);
+          setError(null);
+        }}
+        onSave={() => void save()}
+      />
+    </SettingsCard>
+  );
+}
+
 function InstructionsCard({ projectId }: { projectId: string }) {
   const [status, setStatus] = useState<InstructionsStatus | null>(null);
   const [busy, setBusy] = useState(false);
@@ -395,6 +488,7 @@ function GuardCard({ projectId }: { projectId: string }) {
 function CompactionCard({ projectId }: { projectId: string }) {
   const [initial, setInitial] = useState<CompactionSettingsResponse | null>(null);
   const [enabled, setEnabled] = useState(true);
+  const [triggerAt, setTriggerAt] = useState("");
   const [reserve, setReserve] = useState("");
   const [keepRecent, setKeepRecent] = useState("");
   const [saving, setSaving] = useState(false);
@@ -404,6 +498,9 @@ function CompactionCard({ projectId }: { projectId: string }) {
   const adopt = useCallback((settings: CompactionSettingsResponse) => {
     setInitial(settings);
     setEnabled(settings.enabled);
+    setTriggerAt(
+      settings.autoCompactWindow === null ? "" : String(settings.autoCompactWindow),
+    );
     setReserve(String(settings.reserveTokens));
     setKeepRecent(String(settings.keepRecentTokens));
   }, []);
@@ -423,9 +520,15 @@ function CompactionCard({ projectId }: { projectId: string }) {
     };
   }, [adopt, projectId]);
 
+  const storedTrigger =
+    initial?.autoCompactWindow === null || initial?.autoCompactWindow === undefined
+      ? ""
+      : String(initial.autoCompactWindow);
+
   const dirty = Boolean(
     initial &&
       (enabled !== initial.enabled ||
+        triggerAt.trim() !== storedTrigger ||
         reserve.trim() !== String(initial.reserveTokens) ||
         keepRecent.trim() !== String(initial.keepRecentTokens)),
   );
@@ -434,21 +537,43 @@ function CompactionCard({ projectId }: { projectId: string }) {
     if (!initial) return;
     setError(null);
     setSaved(false);
-    const reserveTokens = Number(reserve);
-    const keepRecentTokens = Number(keepRecent);
     const { bounds } = initial;
-    for (const [label, value, range] of [
-      ["Reserve for the reply", reserveTokens, bounds.reserveTokens],
-      ["Keep recent verbatim", keepRecentTokens, bounds.keepRecentTokens],
-    ] as const) {
-      if (!Number.isInteger(value) || value < range.min || value > range.max) {
-        setError(`${label} must be a whole number between ${range.min.toLocaleString()} and ${range.max.toLocaleString()}.`);
+    const keepRecentTokens = Number(keepRecent);
+
+    if (!Number.isInteger(keepRecentTokens) || keepRecentTokens < bounds.keepRecentTokens.min || keepRecentTokens > bounds.keepRecentTokens.max) {
+      setError(`Keep recent verbatim must be a whole number between ${bounds.keepRecentTokens.min.toLocaleString()} and ${bounds.keepRecentTokens.max.toLocaleString()}.`);
+      return;
+    }
+
+    // An empty trigger means "use the reserve below"; the explicit reserve is
+    // what the old card wrote, so leave it editable for anyone already on it.
+    const trimmedTrigger = triggerAt.trim();
+    let autoCompactWindow: number | null = null;
+    if (trimmedTrigger !== "") {
+      const value = Number(trimmedTrigger);
+      if (!Number.isInteger(value) || value < bounds.autoCompactWindow.min || value > bounds.autoCompactWindow.max) {
+        setError(`Start compacting at must be a whole number between ${bounds.autoCompactWindow.min.toLocaleString()} and ${bounds.autoCompactWindow.max.toLocaleString()}.`);
         return;
       }
+      autoCompactWindow = value;
     }
+
+    const reserveTokens = Number(reserve);
+    if (!Number.isInteger(reserveTokens) || reserveTokens < bounds.reserveTokens.min || reserveTokens > bounds.reserveTokens.max) {
+      setError(`Reserve for the reply must be a whole number between ${bounds.reserveTokens.min.toLocaleString()} and ${bounds.reserveTokens.max.toLocaleString()}.`);
+      return;
+    }
+
     setSaving(true);
     try {
-      adopt(await putProjectCompaction(projectId, { enabled, reserveTokens, keepRecentTokens }));
+      adopt(
+        await putProjectCompaction(projectId, {
+          enabled,
+          reserveTokens,
+          keepRecentTokens,
+          autoCompactWindow,
+        }),
+      );
       setSaved(true);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Save failed");
@@ -461,51 +586,84 @@ function CompactionCard({ projectId }: { projectId: string }) {
     <SettingsCard
       id="context"
       title="Context compaction"
-      description="Compaction summarizes older messages when a conversation nears the model's context window. Kady puts its own state block (plan, notebook, results, environment) ahead of the summary. Applies to every chat in this project, including open ones; use “Compact now” in a chat to run it by hand."
+      description="Compaction summarizes older messages when a conversation nears the model's context window. Kady puts its own state block (plan, notebook, results, environment) ahead of the summary. Applies to every chat in this project; use “Compact now” in a chat to run it by hand."
     >
       {!initial ? (
         error ? <SettingsError>{error}</SettingsError> : <p className="text-[11px] text-muted-foreground">Loading…</p>
       ) : (
         <div data-testid="compaction-settings">
+          {(initial.invalid ?? []).length > 0 ? (
+            <SettingsError>
+              This project&apos;s sandbox/.pi/settings.json holds values Pi rejects,
+              so runs will fail until they are fixed:{" "}
+              <span className="font-mono">{(initial.invalid ?? []).join(", ")}</span>
+              . Saving this card does not touch them.
+            </SettingsError>
+          ) : null}
           <div className="flex items-center justify-between gap-3">
             <span className="text-xs">Compact automatically near the context limit</span>
             <Switch checked={enabled} onCheckedChange={setEnabled} aria-label="Automatic compaction" />
           </div>
-          <div className="mt-3 grid grid-cols-2 gap-3">
+          <div className="mt-3 grid gap-3">
             <label className="grid gap-1 text-[11px] text-muted-foreground">
-              Reserve for the reply (tokens)
+              Start compacting at (tokens)
               <Input
                 type="number"
                 inputMode="numeric"
-                min={initial.bounds.reserveTokens.min}
-                max={initial.bounds.reserveTokens.max}
-                step={1000}
-                value={reserve}
-                onChange={(e) => setReserve(e.target.value)}
-                aria-label="Reserve tokens"
+                min={initial.bounds.autoCompactWindow.min}
+                max={initial.bounds.autoCompactWindow.max}
+                step={10000}
+                value={triggerAt}
+                placeholder="Leave empty to use the reserve below"
+                onChange={(e) => setTriggerAt(e.target.value)}
+                aria-label="Start compacting at tokens"
                 className="h-8 text-xs"
               />
-              <span className="text-[10px]">
-                {initial.bounds.reserveTokens.min.toLocaleString()}–{initial.bounds.reserveTokens.max.toLocaleString()}
+              <span className="text-[10px] leading-relaxed">
+                The same token count on every model — each run converts it to that
+                model's window. Leave empty to keep the older “reserve” behaviour.
               </span>
             </label>
-            <label className="grid gap-1 text-[11px] text-muted-foreground">
-              Keep recent verbatim (tokens)
-              <Input
-                type="number"
-                inputMode="numeric"
-                min={initial.bounds.keepRecentTokens.min}
-                max={initial.bounds.keepRecentTokens.max}
-                step={1000}
-                value={keepRecent}
-                onChange={(e) => setKeepRecent(e.target.value)}
-                aria-label="Keep recent tokens"
-                className="h-8 text-xs"
-              />
-              <span className="text-[10px]">
-                {initial.bounds.keepRecentTokens.min.toLocaleString()}–{initial.bounds.keepRecentTokens.max.toLocaleString()}
-              </span>
-            </label>
+            <div className="grid grid-cols-2 gap-3">
+              <label className="grid gap-1 text-[11px] text-muted-foreground">
+                Reserve for the reply (tokens)
+                <Input
+                  type="number"
+                  inputMode="numeric"
+                  min={initial.bounds.reserveTokens.min}
+                  max={initial.bounds.reserveTokens.max}
+                  step={1000}
+                  value={reserve}
+                  onChange={(e) => setReserve(e.target.value)}
+                  aria-label="Reserve tokens"
+                  className="h-8 text-xs"
+                />
+                <span className="text-[10px]">
+                  {initial.bounds.reserveTokens.min.toLocaleString()}–{initial.bounds.reserveTokens.max.toLocaleString()}
+                  {/* A sibling text node rather than one interpolated string:
+                      the runtime translator matches whole text nodes, so a
+                      concatenated sentence would stay English. */}
+                  {triggerAt.trim() !== "" ? <> · <span>ignored while a trigger is set</span></> : null}
+                </span>
+              </label>
+              <label className="grid gap-1 text-[11px] text-muted-foreground">
+                Keep recent verbatim (tokens)
+                <Input
+                  type="number"
+                  inputMode="numeric"
+                  min={initial.bounds.keepRecentTokens.min}
+                  max={initial.bounds.keepRecentTokens.max}
+                  step={1000}
+                  value={keepRecent}
+                  onChange={(e) => setKeepRecent(e.target.value)}
+                  aria-label="Keep recent tokens"
+                  className="h-8 text-xs"
+                />
+                <span className="text-[10px]">
+                  {initial.bounds.keepRecentTokens.min.toLocaleString()}–{initial.bounds.keepRecentTokens.max.toLocaleString()}
+                </span>
+              </label>
+            </div>
           </div>
           <CardActions
             dirty={dirty}
@@ -542,6 +700,7 @@ export function ProjectSettingsPanel({ projectId }: { projectId: string }) {
         // Remount per project so no card shows the previous project's draft.
         <div key={project.id} className="flex flex-col gap-4">
           <GeneralCard project={project} />
+          <UserInstructionsCard projectId={project.id} />
           <InstructionsCard projectId={project.id} />
           <GuardCard projectId={project.id} />
           <CompactionCard projectId={project.id} />
