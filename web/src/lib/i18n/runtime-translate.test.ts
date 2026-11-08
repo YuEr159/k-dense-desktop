@@ -335,6 +335,70 @@ describe("translateSubtree", () => {
     expect(text).toContain("在项目设置中提高上限");
     expect(text).toContain("它们会自行恢复。");
   });
+
+  /**
+   * `<b>Title</b><br>Body…` is how every InfoTooltip renders. A <br> is not
+   * inline markup, so the flattened match used to reject the whole block and
+   * any body carrying `<kbd>`/`<i>` stayed English — three separate bug
+   * reports (Skills, Files, Download all as zip) traced back to this.
+   */
+  it("translates a tooltip body across a <br> while keeping its markup", () => {
+    const host = document.createElement("div");
+    host.innerHTML =
+      "<b>Files</b><br>Upload data, figures, manuscripts, or code. Everything " +
+      "lands in the sandbox and can be referenced with <kbd>@</kbd>.";
+
+    apply(translateSubtree(host, matcher, noSkip));
+
+    expect(host.querySelector("b")!.textContent).toBe("文件");
+    expect(host.querySelector("br")).not.toBeNull();
+    const kbd = host.querySelector("kbd")!;
+    expect(kbd.textContent).toBe("@");
+    // The kbd still sits inside the sentence, not appended at the end.
+    expect(host.textContent).toContain("可用 @ 引用。");
+  });
+
+  it("leaves the title and body as separate sentences when translating across a <br>", () => {
+    const host = document.createElement("div");
+    host.innerHTML =
+      "<b>Skills</b><br>Opt-in playbooks for specific tasks (e.g. <i>scanpy</i>, " +
+      "<i>literature-review</i>, <i>modal</i>). Kady follows pinned skills on every " +
+      "message until you remove them.";
+
+    apply(translateSubtree(host, matcher, noSkip));
+
+    // The title must not be glued onto the body's key — it would never match.
+    expect(host.querySelector("b")!.textContent).toBe("技能");
+    expect(host.querySelectorAll("i")).toHaveLength(3);
+    expect(host.textContent).toContain("针对特定任务的可选操作手册");
+  });
+
+  it("is idempotent: a second pass over translated markup changes nothing", () => {
+    const host = document.createElement("div");
+    host.innerHTML =
+      "<b>Download all as zip</b><br>Package the entire sandbox into a " +
+      "<kbd>.zip</kbd> for archiving, sharing with collaborators, or your lab notebook.";
+
+    apply(translateSubtree(host, matcher, noSkip));
+    const once = host.innerHTML;
+    apply(translateSubtree(host, matcher, noSkip));
+    expect(host.innerHTML).toBe(once);
+    expect(host.querySelector("kbd")!.textContent).toBe(".zip");
+  });
+
+  it("keeps React's text nodes attached when collapsing a translated run", () => {
+    // React renders `{a} of {b}` as one node per interpolation and holds
+    // references to them; replacing the run detaches those and the next
+    // render throws "insertBefore … is not a child of this node".
+    const host = document.createElement("div");
+    host.innerHTML = "<p>2 of 5</p>";
+    const paragraph = host.querySelector("p")!;
+    const before = [...paragraph.childNodes];
+
+    apply(translateSubtree(host, matcher, noSkip));
+
+    for (const node of before) expect(node.parentNode).toBe(paragraph);
+  });
 });
 
 describe("buildMatcher", () => {

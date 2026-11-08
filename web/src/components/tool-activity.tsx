@@ -34,6 +34,7 @@ import { cn } from "@/lib/utils";
 import { workflowScriptAgents } from "@/lib/workflow-script";
 import {
   DEFAULT_TRANSCRIPT_VIEW,
+  formatToolDuration,
   lastSegmentPreview,
   reasoningShowsPreview,
   reasoningStartsOpen,
@@ -181,6 +182,49 @@ function StatusDot({ status }: { status: ActivityItem["status"] }) {
   return <CheckIcon className="size-3 shrink-0 text-emerald-500" />;
 }
 
+/**
+ * How long the call has been running, or took.
+ *
+ * A spinner alone cannot distinguish a 2-second call from one stuck on a
+ * `urlopen` with no timeout — the failure that started this. Running cards tick
+ * once a second off `timestamp` (the `tool_start` moment); finished ones use
+ * Pi's own `durationMs`, which is also persisted, so a reopened chat shows the
+ * same number.
+ *
+ * Past a minute the text turns amber: not an error, but the point where a
+ * stalled call is worth looking at.
+ */
+function ToolDuration({ item }: { item: ActivityItem }) {
+  const running = item.status === "running";
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!running) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [running]);
+
+  const elapsed = running
+    ? now - item.timestamp
+    : (item.durationMs ?? null);
+  // Nothing to say yet on the first tick, and a history row recorded before Pi
+  // persisted the field has no honest number to show.
+  if (elapsed === null || !Number.isFinite(elapsed)) return null;
+  if (running && elapsed < 1_000) return null;
+
+  return (
+    <span
+      className={cn(
+        "shrink-0 tabular-nums text-[10px] text-muted-foreground",
+        running && elapsed >= 60_000 && "text-amber-600 dark:text-amber-500",
+      )}
+    >
+      {running ? "Elapsed " : "Took "}
+      {formatToolDuration(elapsed)}
+    </span>
+  );
+}
+
 function fullArgs(args: unknown): string {
   if (args == null) return "";
   if (typeof args === "object") {
@@ -253,7 +297,10 @@ const ToolCard = memo(function ToolCard({ item }: { item: ActivityItem }) {
             {summary}
           </span>
         )}
-        <span className={cn(!summary && "ml-auto")}>
+        {/* Pinned to the right edge whether or not there is a duration to show,
+            so a card does not jump when the timer appears on the first tick. */}
+        <span className="ml-auto flex shrink-0 items-center gap-1.5">
+          <ToolDuration item={item} />
           <StatusDot status={item.status} />
         </span>
       </CollapsibleTrigger>

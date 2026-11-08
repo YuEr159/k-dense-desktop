@@ -4,6 +4,7 @@ import {
   DEFAULT_TRANSCRIPT_VIEW,
   TRANSCRIPT_VIEW_CHANGED_EVENT,
   TRANSCRIPT_VIEW_KEY,
+  formatToolDuration,
   lastSegmentPreview,
   normalizeTranscriptView,
   readTranscriptView,
@@ -139,5 +140,26 @@ describe("mode capabilities", () => {
     expect(reasoningShowsPreview("compact")).toBe(false);
     expect(reasoningShowsPreview("standard")).toBe(true);
     expect(reasoningShowsPreview("expanded")).toBe(true);
+  });
+});
+
+describe("formatToolDuration", () => {
+  it("matches Pi's own TUI formatter", () => {
+    // Values come from render-utils.js `formatToolDuration`; this table is the
+    // contract between the copy here and the upstream one.
+    expect(formatToolDuration(0)).toBe("0.0s");
+    expect(formatToolDuration(999)).toBe("1.0s");
+    expect(formatToolDuration(4_200)).toBe("4.2s");
+    expect(formatToolDuration(59_940)).toBe("59.9s");
+    expect(formatToolDuration(60_000)).toBe("1m 0s");
+    expect(formatToolDuration(90_000)).toBe("1m 30s");
+    expect(formatToolDuration(3_600_000)).toBe("1h 0m 0s");
+    expect(formatToolDuration(7_384_000)).toBe("2h 3m 4s");
+  });
+
+  it("never renders a negative or non-finite duration", () => {
+    expect(formatToolDuration(-1)).toBe("0.0s");
+    expect(formatToolDuration(Number.NaN)).toBe("0.0s");
+    expect(formatToolDuration(Number.POSITIVE_INFINITY)).toBe("0.0s");
   });
 });

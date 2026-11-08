@@ -137,6 +137,39 @@ describe("useAgent notebook accumulation", () => {
     expect(result.current.notebookEntries.map((e) => e.id)).toEqual(["tc_1"]);
   });
 
+  // The tool card's elapsed clock is driven entirely by these two frames: the
+  // running card ticks off tool_start's arrival, and the finished one shows the
+  // duration Pi measured. Dropping durationMs here is what made a stuck call
+  // indistinguishable from a fast one.
+  it("carries Pi's tool duration from the stream onto the activity", async () => {
+    vi.spyOn(projects, "apiFetch").mockImplementation(async (path: string) => {
+      if (path === "/sessions") {
+        return new Response(JSON.stringify({ id: "s1" }), { status: 200 });
+      }
+      if (path === "/sessions/s1/run") {
+        return new Response(
+          sseStream([
+            { type: "tool_start", toolName: "bash", toolCallId: "tc_slow", args: { command: "sleep 90" } },
+            { type: "tool_end", toolName: "bash", toolCallId: "tc_slow", result: "done", durationMs: 90_400 },
+          ]),
+          { status: 200 },
+        );
+      }
+      throw new Error(`unexpected apiFetch path: ${path}`);
+    });
+
+    const { result } = renderHook(() => useAgent());
+    await act(async () => {
+      await result.current.send("hi");
+    });
+
+    const activity = result.current.messages
+      .flatMap((message) => message.activities ?? [])
+      .find((item) => item.id === "tc_slow");
+    expect(activity?.status).toBe("complete");
+    expect(activity?.durationMs).toBe(90_400);
+  });
+
   it("tracks Pi context utilization from the SSE stream", async () => {
     vi.spyOn(projects, "apiFetch").mockImplementation(async (path: string) => {
       if (path === "/sessions") {

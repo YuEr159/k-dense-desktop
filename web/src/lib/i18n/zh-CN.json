@@ -1812,5 +1812,9 @@
   "Hide the file tree to give the other panels more room.": "隐藏文件树，给其他面板腾出空间。",
   "Hide the preview to give the other panels more room.": "隐藏预览，给其他面板腾出空间。",
   "Hide the chat to give the other panels more room.": "隐藏对话，给其他面板腾出空间。",
-  "Package the entire sandbox into a {0} for archiving, sharing with collaborators, or your lab notebook.": "把整个沙盒打包成 {0}，用于归档、与协作者分享或存入实验记录本。"
+  "Package the entire sandbox into a {0} for archiving, sharing with collaborators, or your lab notebook.": "把整个沙盒打包成 {0}，用于归档、与协作者分享或存入实验记录本。",
+  "Upload data, figures, manuscripts, or code. Everything lands in the sandbox and can be referenced with {0}.": "上传数据、图表、文稿或代码。所有内容都会存入沙盒，可用 {0} 引用。",
+  "Opt-in playbooks for specific tasks (e.g. {0}, {1}, {2}). Kady follows pinned skills on every message until you remove them.": "针对特定任务的可选操作手册（例如 {0}、{1}、{2}）。在你移除之前，Kady 会在每条消息上沿用已固定的技能。",
+  "Took {0}": "耗时 {0}",
+  "Elapsed {0}": "已运行 {0}"
 }

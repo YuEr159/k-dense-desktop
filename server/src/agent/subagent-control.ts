@@ -130,7 +130,7 @@ export function makeSubagentControlExtension(projectId: string): ExtensionFactor
       const packages = path.resolve(import.meta.dirname, "../../pi-packages");
       const webEntry = path.resolve(webAccessPackageDir(), JSON.parse(fs.readFileSync(path.join(webAccessPackageDir(), "package.json"), "utf8")).pi.extensions[0]);
       const required = registerRequiredChildExtensions({ sessionId, extensions: [
-        ...["kady-guard", "kady-notebook", "kady-modal", "kady-pdf-annotations", "kady-child-runtime"].map((id) => ({ id, path: path.join(packages, id, "index.ts") })),
+        ...["kady-guard", "kady-bash-timeout", "kady-notebook", "kady-modal", "kady-pdf-annotations", "kady-child-runtime"].map((id) => ({ id, path: path.join(packages, id, "index.ts") })),
         { id: "pi-web-access", path: fs.statSync(webEntry).isDirectory() ? path.join(webEntry, "index.js") : webEntry },
       ] });
       disposers.push(() => required.dispose());

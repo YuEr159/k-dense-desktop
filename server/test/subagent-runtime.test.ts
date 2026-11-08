@@ -75,7 +75,7 @@ it("loads child MCP and mandatory tools with ambient extensions disabled, and me
   const factory = createDefaultChildSessionFactory({ loadPiCodingAgent: async () => ({ ...sdk, createAgentSession: async (args: any) => {
     const result = await sdk.createAgentSession(args); captured = result.session; captured.agent.streamFunction = provider as any; return result;
   } }) });
-  const required = ["kady-guard", "kady-notebook", "kady-modal", "kady-pdf-annotations", "kady-child-runtime"].map((id) => ({ id, path: path.resolve(import.meta.dirname, "../pi-packages", id, "index.ts") }));
+  const required = ["kady-guard", "kady-bash-timeout", "kady-notebook", "kady-modal", "kady-pdf-annotations", "kady-child-runtime"].map((id) => ({ id, path: path.resolve(import.meta.dirname, "../pi-packages", id, "index.ts") }));
   const errors: any[] = [];
   let child: any;
   try {

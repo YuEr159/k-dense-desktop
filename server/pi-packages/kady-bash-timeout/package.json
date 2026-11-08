@@ -1,0 +1,14 @@
+{
+  "name": "kady-bash-timeout",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "K-Dense: default timeout for shell commands in child pi processes — a background specialist has no UI to interrupt a wedged command.",
+  "keywords": ["pi-package"],
+  "pi": {
+    "extensions": ["./index.ts"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  }
+}

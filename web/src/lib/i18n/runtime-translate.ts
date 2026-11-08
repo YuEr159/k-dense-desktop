@@ -227,29 +227,49 @@ export function translateSubtree(
     const parts = [...element.childNodes];
     if (parts.length < 2) continue;
 
-    const inline = flattenInline(element);
-    if (!inline) continue;
+    // `<b>Title</b><br>Body…` is the standard tooltip shape. A <br> separates
+    // two independent sentences, so it ends the match rather than appearing in
+    // it — otherwise the title and body would be glued into one string that no
+    // dictionary entry describes, and every tooltip whose body contains inline
+    // markup (`<kbd>.zip</kbd>`) stayed English.
+    for (const run of splitAtBreaks(parts)) {
+      if (run.length < 2) continue;
 
-    const translated = translateText(matcher, inline.text);
-    if (translated === inline.text) continue;
+      const inline = flattenInline(run);
+      if (!inline) continue;
 
-    const rebuilt = rebuildPreservingInline(element, inline, translated);
-    if (rebuilt) {
-      // The prefix was rewritten; its old text nodes are gone. Mark whatever
-      // came before a preserved control so the per-node pass below does not
-      // translate the new Chinese text a second time.
-      for (const child of parts) {
-        if (inline.stopAt && child === inline.stopAt) break;
-        if (child.nodeType === Node.TEXT_NODE) merged.add(child as Text);
+      const translated = translateText(matcher, inline.text);
+      if (translated === inline.text) continue;
+
+      const rebuilt = rebuildPreservingInline(element, run, inline, translated);
+      if (rebuilt) {
+        // The run's old text nodes were rewritten or blanked. Mark them so the
+        // per-node pass below does not translate the new Chinese a second time.
+        for (const child of run) {
+          if (inline.stopAt && child === inline.stopAt) break;
+          if (child.nodeType === Node.TEXT_NODE) merged.add(child as Text);
+        }
+        continue;
       }
-      continue;
-    }
 
-    // No inline markup: collapse the pure-text run into one node. React
-    // re-renders from its own model on the next update, restoring the parts.
-    if (!inline.hasMarkup) {
-      for (const child of parts) merged.add(child as Text);
-      element.textContent = translated;
+      // No inline markup: collapse the pure-text run into one node.
+      //
+      // Write through the EXISTING nodes rather than `element.textContent = …`.
+      // React renders `{a} of {b}` as one text node per interpolation and keeps
+      // its own references to them; replacing the run detaches those nodes, and
+      // the next render that inserts next to one throws
+      // "insertBefore … is not a child of this node" — which took the whole
+      // settings panel down when a spend limit was saved. Keeping every node in
+      // place (the rest blanked) leaves React's anchors valid.
+      if (!inline.hasMarkup) {
+        const texts = run.filter((child): child is Text => child.nodeType === Node.TEXT_NODE);
+        for (const child of run) merged.add(child as Text);
+        if (texts.length === 0) continue;
+        if (texts[0].nodeValue !== translated) texts[0].nodeValue = translated;
+        for (let i = 1; i < texts.length; i++) {
+          if (texts[i].nodeValue !== "") texts[i].nodeValue = "";
+        }
+      }
     }
   }
 
@@ -303,6 +323,30 @@ const INLINE_TAGS = new Set(["KBD", "CODE", "STRONG", "EM", "B", "I", "U", "S", 
 const CONTROL_TAGS = new Set(["INPUT", "TEXTAREA", "SELECT", "BUTTON"]);
 
 /**
+ * Split an element's children at `<br>` into independent sentences.
+ *
+ * Tooltips render as `<b>Title</b><br>Body…`, and the two halves are separate
+ * copy with separate dictionary entries. `flattenInline` refuses an element
+ * containing anything outside its inline set, so a `<br>` used to reject the
+ * whole block — the title translated only because it was also a lone text
+ * node, and every body that carried `<kbd>` or `<i>` stayed English.
+ *
+ * A `<br>` with no copy before it (a leading break) yields an empty first run,
+ * which the caller skips.
+ */
+function splitAtBreaks(parts: Node[]): Node[][] {
+  const runs: Node[][] = [[]];
+  for (const part of parts) {
+    if (part.nodeType === Node.ELEMENT_NODE && (part as Element).tagName === "BR") {
+      runs.push([]);
+    } else {
+      runs[runs.length - 1].push(part);
+    }
+  }
+  return runs;
+}
+
+/**
  * Flatten an element's inline content into one string for matching.
  *
  * Returns `null` when the element contains anything that is not text or inline
@@ -314,7 +358,7 @@ const CONTROL_TAGS = new Set(["INPUT", "TEXTAREA", "SELECT", "BUTTON"]);
  * dictionary key carries a `{n}` where each inline element sat, which lets the
  * translation move them (Chinese word order often puts the filename first).
  */
-function flattenInline(element: Element): {
+function flattenInline(nodes: Node[]): {
   text: string;
   hasMarkup: boolean;
   /** Set when the copy ended at a form control; only the prefix is rewritten. */
@@ -349,7 +393,7 @@ function flattenInline(element: Element): {
     return true;
   };
 
-  for (const child of element.childNodes) {
+  for (const child of nodes) {
     if (!visit(child)) {
       // A non-inline element is fatal unless it was a control we stopped at.
       if (stopAt) break;
@@ -363,12 +407,19 @@ function flattenInline(element: Element): {
  * Write a translation back, re-inserting the inline elements where the
  * translation's `{n}` placeholders put them.
  *
- * Returns true when it handled the element. Anything the translation mentions
- * that no longer has a source element is dropped rather than left as a raw
- * `{0}` on screen.
+ * Only `run` — one `<br>`-delimited slice of the element's children — is
+ * rewritten, so the rest of the element (a tooltip's title line) keeps its
+ * nodes. Text nodes are REUSED from the run rather than recreated: React holds
+ * references to them, and a replacement detaches those, which makes the next
+ * render that inserts beside one throw. See the pure-text branch in the caller.
+ *
+ * Returns true when it handled the run. Anything the translation mentions that
+ * no longer has a source element is dropped rather than left as a raw `{0}` on
+ * screen.
  */
 function rebuildPreservingInline(
   element: Element,
+  run: Node[],
   flattened: {
     text: string;
     hasMarkup: boolean;
@@ -378,8 +429,8 @@ function rebuildPreservingInline(
   translated: string,
 ): boolean {
   // Plain text with no placeholders and no control to preserve: the caller's
-  // textContent path is simpler and does not create nodes it would then leave
-  // behind, so let it handle this one.
+  // in-place text write is simpler and does not create nodes it would then
+  // leave behind, so let it handle this one.
   if (!flattened.hasMarkup && !flattened.stopAt) return false;
 
   // The trailing space separated the English copy from the control it labels
@@ -394,29 +445,48 @@ function rebuildPreservingInline(
   const pattern = /\{(\d+)\}/g;
   let match: RegExpExecArray | null = pattern.exec(body);
   while (match) {
-    if (match.index > cursor) {
-      nodes.push(document.createTextNode(body.slice(cursor, match.index)));
-    }
+    if (match.index > cursor) nodes.push(document.createTextNode(body.slice(cursor, match.index)));
     const source = flattened.inline.find((entry) => entry.index === Number(match![1]));
     if (source) nodes.push(source.node);
     cursor = match.index + match[0].length;
-    match = pattern.exec(translated);
+    match = pattern.exec(body);
   }
-  if (cursor < body.length) {
-    nodes.push(document.createTextNode(body.slice(cursor)));
-  }
+  if (cursor < body.length) nodes.push(document.createTextNode(body.slice(cursor)));
 
   // The copy ended at a form control: keep it and everything after it, or the
   // replacement would delete the field the label describes.
   if (flattened.stopAt) {
-    const tail: Node[] = [];
     for (let node: Node | null = flattened.stopAt; node; node = node.nextSibling) {
-      tail.push(node);
+      nodes.push(node);
     }
-    nodes.push(...tail);
   }
 
-  element.replaceChildren(...nodes);
+  // Hand the run's own text nodes to the leading text slots so the nodes React
+  // rendered stay attached; create fresh ones only past that pool.
+  const pool = run.filter((n): n is Text => n.nodeType === Node.TEXT_NODE);
+  let next = 0;
+  const out = nodes.map((node) => {
+    if (node.nodeType !== Node.TEXT_NODE) return node;
+    const reused = pool[next];
+    if (!reused) return node;
+    next++;
+    reused.nodeValue = (node as Text).nodeValue;
+    return reused;
+  });
+  // Blank any surplus text nodes rather than removing them — React still holds
+  // them and will write into them again on its next render.
+  for (let i = next; i < pool.length; i++) pool[i].nodeValue = "";
+
+  // Splice the rebuilt run in ahead of the run's first node, keeping order.
+  // A marker comment is the anchor: `insertBefore(node, node)` is a no-op and
+  // `insertBefore(node, node.nextSibling)` would double-move a reused node, so
+  // neither original node can serve as the reference.
+  const anchor = run[0];
+  if (!anchor || anchor.parentNode !== element) return false;
+  const marker = document.createComment("");
+  element.insertBefore(marker, anchor);
+  for (const node of out) element.insertBefore(node, marker);
+  marker.remove();
   return true;
 }
 

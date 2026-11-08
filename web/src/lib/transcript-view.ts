@@ -122,3 +122,22 @@ export function reasoningStartsOpen(mode: TranscriptViewMode): boolean {
 export function reasoningShowsPreview(mode: TranscriptViewMode): boolean {
   return mode !== "compact";
 }
+
+/**
+ * Format a tool call's duration the way Pi's own TUI does: `4.2s` below a
+ * minute, then `1m 30s`, then `2h 3m 4s`.
+ *
+ * Copied rather than imported — the web bundle must not depend on
+ * `@earendil-works/*` — so this is the one place to keep in step with
+ * `pi-coding-agent/dist/core/tools/render-utils.js` (`formatToolDuration`).
+ */
+export function formatToolDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return "0.0s";
+  const seconds = ms / 1000;
+  if (seconds < 60) return `${seconds.toFixed(1)}s`;
+  const totalSeconds = Math.floor(seconds);
+  const minutes = Math.floor(totalSeconds / 60);
+  const remainder = totalSeconds % 60;
+  if (minutes < 60) return `${minutes}m ${remainder}s`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m ${remainder}s`;
+}

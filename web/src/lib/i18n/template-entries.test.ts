@@ -35,6 +35,16 @@ const cases: [string, string][] = [
     "A few knobs are read from .env at startup only — e.g. GITHUB_TOKEN (update checks) and HTTPS_PROXY (outbound proxy). Restart Kady after changing them.",
     "启动时",
   ],
+  // InfoTooltip bodies sit after a `<br>`, which used to reject the whole
+  // block. Copied from the rendered DOM of the "+" menu's Files and Skills tabs.
+  [
+    "Upload data, figures, manuscripts, or code. Everything lands in the sandbox and can be referenced with {0}.",
+    "上传数据、图表、文稿或代码",
+  ],
+  [
+    "Opt-in playbooks for specific tasks (e.g. {0}, {1}, {2}). Kady follows pinned skills on every message until you remove them.",
+    "针对特定任务的可选操作手册",
+  ],
 ];
 
 describe("multi-node templates", () => {

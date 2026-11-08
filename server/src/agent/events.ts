@@ -480,6 +480,11 @@ export function toClientFrame(
         toolCallId: ev.toolCallId,
         toolName: ev.toolName,
         isError: ev.isError,
+        // Pi measures this with a monotonic clock and also persists it on the
+        // toolResult message, so a reopened chat shows the same number the
+        // live stream did. A tool card that only spins cannot tell a 2-second
+        // call from one that has been stuck for ten minutes.
+        ...(typeof ev.durationMs === "number" ? { durationMs: ev.durationMs } : {}),
         ...toolResultFields(ev.result, sandboxRoot),
         ...parentField(ev),
       };

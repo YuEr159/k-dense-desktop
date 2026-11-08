@@ -51,8 +51,10 @@ import {
 import { makeFusionRequestExtension } from "./fusion-bridge.ts";
 import { makeScientificCompactionExtension } from "./compaction-bridge.ts";
 import { makeDataGuardExtension } from "./data-guard.ts";
+import { makeBashTimeoutExtension } from "./bash-timeout.ts";
 import { readSchedulerState } from "./scheduler-state.ts";
 import { seedGuardPackage } from "./guard-bridge.ts";
+import { seedBashTimeoutPackage } from "./bash-timeout-bridge.ts";
 import { seedPromptTemplates } from "./prompts.ts";
 import { seedWatchdogGuidance } from "./watchdog-settings.ts";
 import { ensureWebAccess } from "./web-access-bridge.ts";
@@ -370,6 +372,10 @@ async function build(
   seedBuiltinAgentPdfAnnotationTools(paths);
   // Raw-data guard for background specialists (the lead runs data-guard.ts).
   seedGuardPackage(paths);
+  // Default shell timeout for background specialists (the lead runs
+  // bash-timeout.ts in-process): a child has no UI to interrupt a wedged
+  // command, and Pi's bash has no default timeout of its own.
+  seedBashTimeoutPackage(paths);
   // Scientific prompt templates (`/qc <file>` …) live in sandbox/.pi/prompts.
   seedPromptTemplates(paths);
   // Standing instructions for the (opt-in) pi-subagents watchdog reviewer.
@@ -432,6 +438,12 @@ async function build(
       // Child Modal jobs are submitted through the localhost bridge under the
       // child run id; reattribute them to this parent session on completion.
       makeSubagentModalExtension(projectId, () => holder.session?.sessionId ?? ""),
+      // Pi's bash has no default timeout, and a chat turn blocks on the tool:
+      // one wedged command (a request with no timeout) stalls the run until
+      // the user notices. Fill in a 30-minute ceiling only when the model did
+      // not choose one. Registered before the guard so its `tool_call` sees the
+      // same command either way — neither reads the other's field.
+      makeBashTimeoutExtension(),
       // Raw-data guard: blocks mutations of protected paths and asks the user
       // before destructive shell commands. Registered after the subagent
       // bridge so budget gates run first.

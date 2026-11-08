@@ -27,6 +27,12 @@ export interface ActivityItem {
   detail?: string;
   status: "running" | "complete" | "error";
   timestamp: number;
+  /**
+   * Wall-clock milliseconds Pi measured for the call, from `tool_end`. Absent
+   * while running (the card ticks off `timestamp` instead) and for results
+   * recorded before Pi persisted the field.
+   */
+  durationMs?: number;
   /** Raw tool name (e.g. "bash", "write") for icon + summary rendering. */
   toolName?: string;
   /** Frontmatter skill name when this read is a skill activation (server-resolved). */
@@ -360,6 +366,7 @@ export function applyFrameToMessage(
         ...next[idx],
         status,
         result: typeof frame.result === "string" ? frame.result : next[idx].result,
+        ...(typeof frame.durationMs === "number" ? { durationMs: frame.durationMs } : {}),
         ...(scientificResult ? { scientificResult } : {}),
         ...(resultImages.length > 0 ? { resultImages } : {}),
         ...(typeof frame.imagesTruncated === "number" && frame.imagesTruncated > 0

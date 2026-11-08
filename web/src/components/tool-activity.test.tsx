@@ -195,6 +195,64 @@ describe("ToolActivityList", () => {
     expect(screen.getByAltText("Tool result image 1")).toBeInTheDocument();
     expect(screen.getByText(/1 image omitted/)).toBeInTheDocument();
   });
+
+  // A spinner alone cannot tell a 2-second call from one stuck forever — the
+  // urlopen-with-no-timeout hang that prompted this. Showing the elapsed clock
+  // is what makes a stall visible.
+  it("shows the recorded duration of a finished call", () => {
+    render(
+      <ToolActivityList
+        activities={[item({ toolName: "bash", args: { command: "ls" }, durationMs: 4_200 })]}
+      />,
+    );
+    expect(screen.getByText(/Took\s*4\.2s/)).toBeInTheDocument();
+  });
+
+  it("ticks a running call instead of showing a final duration", () => {
+    vi.useFakeTimers();
+    try {
+      const started = Date.now() - 3_000;
+      render(
+        <ToolActivityList
+          activities={[
+            item({ toolName: "bash", args: { command: "sleep 300" }, status: "running", timestamp: started }),
+          ]}
+        />,
+      );
+      expect(screen.getByText(/Elapsed/)).toBeInTheDocument();
+      expect(screen.queryByText(/Took/)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("marks a running call past a minute so a stall stands out", () => {
+    const started = Date.now() - 90_000;
+    const { container } = render(
+      <ToolActivityList
+        activities={[
+          item({ toolName: "bash", args: { command: "sleep 3000" }, status: "running", timestamp: started }),
+        ]}
+      />,
+    );
+    // The timer renders "Elapsed " + formatted duration as two text nodes; the
+    // wrapper above it has no amber class, so match the innermost span.
+    const elapsed = [...container.querySelectorAll("span")].filter((el) =>
+      el.className.includes("tabular-nums"),
+    );
+    expect(elapsed).toHaveLength(1);
+    expect(elapsed[0].textContent).toMatch(/^Elapsed/);
+    expect(elapsed[0].className).toMatch(/amber/);
+  });
+
+  it("renders no duration for a history row recorded without one", () => {
+    // Results written before Pi persisted durationMs have no honest number;
+    // an empty span keeps the row layout stable without inventing one.
+    const { container } = render(
+      <ToolActivityList activities={[item({ toolName: "read", args: { path: "a.md" } })]} />,
+    );
+    expect(container.textContent).not.toMatch(/Took|Elapsed/);
+  });
 });
 
 describe("NotebookEntryChip", () => {

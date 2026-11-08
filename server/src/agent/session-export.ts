@@ -55,6 +55,8 @@ export interface MessageRow {
     toolName?: string;
     details?: unknown;
     isError?: boolean;
+    /** Milliseconds the tool's execute() took (monotonic, Pi-recorded). */
+    durationMs?: number;
     timestamp?: number;
   };
 }

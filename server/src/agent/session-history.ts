@@ -120,6 +120,10 @@ export function toHistory(file: string, sandboxRoot = ""): HistoryMessage[] {
           toolCallId: m.toolCallId,
           toolName: m.toolName,
           isError: Boolean(m.isError),
+          // Persisted with the toolResult row (Pi writes it from the same
+          // monotonic clock the live event uses), so a reopened chat reports
+          // the real duration instead of a guess from replay time.
+          ...(typeof m.durationMs === "number" ? { durationMs: m.durationMs } : {}),
           ...toolResultFields(
             { content: m.content, details: m.details },
             sandboxRoot,
