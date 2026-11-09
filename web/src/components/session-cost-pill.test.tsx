@@ -127,6 +127,36 @@ describe("SessionCostPill", () => {
     expect(screen.getByText("1.5k tokens")).toBeInTheDocument();
   });
 
+  it("reports the session's output rate in the hover card", async () => {
+    const user = userEvent.setup();
+    const summary = makeSummary({
+      totalUsd: 0.12,
+      totalTokens: 4_000,
+      entries: [makeEntry()],
+      speed: { calls: 7, outputTokens: 2_000, durationMs: 16_000, tokensPerSecond: 125 },
+    });
+    render(<SessionCostPill summary={summary} />);
+
+    await user.hover(screen.getByRole("button"));
+    expect(await screen.findByText(/125 tok\/s across 7 model calls/)).toBeInTheDocument();
+  });
+
+  it("hides the rate row when no call recorded a duration", async () => {
+    const user = userEvent.setup();
+    const summary = makeSummary({
+      totalUsd: 0.12,
+      totalTokens: 4_000,
+      entries: [makeEntry()],
+      // A session whose log predates the field: no honest number to show.
+      speed: { calls: 0, outputTokens: 0, durationMs: 0, tokensPerSecond: null },
+    });
+    render(<SessionCostPill summary={summary} />);
+
+    await user.hover(screen.getByRole("button"));
+    expect(await screen.findByText(/tokens across/)).toBeInTheDocument();
+    expect(screen.queryByText(/tok\/s/)).toBeNull();
+  });
+
   it("renders project total without a limit when spendLimit is unset", () => {
     const project = makeProjectSummary({ totalUsd: 2.5, sessionCount: 3 });
     const session = makeSummary({

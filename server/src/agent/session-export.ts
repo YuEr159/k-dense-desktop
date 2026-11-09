@@ -57,6 +57,12 @@ export interface MessageRow {
     isError?: boolean;
     /** Milliseconds the tool's execute() took (monotonic, Pi-recorded). */
     durationMs?: number;
+    /**
+     * Token counts and cost, on assistant messages. `durationMs` above is
+     * shared with tool results; on an assistant message it is the response's
+     * own duration, which is what the output-rate summary divides by.
+     */
+    usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number };
     timestamp?: number;
   };
 }

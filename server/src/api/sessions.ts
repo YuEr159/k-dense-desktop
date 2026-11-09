@@ -86,6 +86,7 @@ import {
   sessionCostSummary,
   snapshotDelta,
 } from "../cost/ledger.ts";
+import { EMPTY_SPEED, sessionSpeed } from "../cost/tokens-per-second.ts";
 import {
   billingCountsTowardBudget,
   billingForModel,
@@ -254,7 +255,14 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
 
   app.get<{ Params: { id: string } }>("/sessions/:id/costs", async (req, reply) => {
     try {
-      return sessionCostSummary(req.params.id, currentProjectId());
+      const summary = sessionCostSummary(req.params.id, currentProjectId());
+      // The ledger has no timing — `costs.jsonl` stores one row per finished
+      // run, with tokens but no duration — so the output-rate summary has to
+      // read the session log. Kept out of `sessionCostSummary` itself because
+      // the budget checks call that on every admission and must stay cheap; a
+      // 3 MB log parses in ~25 ms, which is fine once per hover.
+      const file = findSessionFile(activePaths(), req.params.id);
+      return { ...summary, speed: file ? sessionSpeed(file) : EMPTY_SPEED };
     } catch (err) {
       reply.code(400);
       return { detail: (err as Error).message };

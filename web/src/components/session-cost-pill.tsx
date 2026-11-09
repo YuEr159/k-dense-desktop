@@ -233,6 +233,16 @@ export function SessionCostPill({
             {summary.entries.length} call
             {summary.entries.length === 1 ? "" : "s"}
           </div>
+          {/* Output rate over the whole response — first-token wait included,
+              which is what waiting on a reply actually feels like. Hidden when
+              no call recorded both tokens and a duration. */}
+          {typeof summary.speed?.tokensPerSecond === "number" && (
+            <div className="text-muted-foreground mt-0.5 text-xs tabular-nums">
+              {Math.round(summary.speed.tokensPerSecond)} tok/s across{" "}
+              {summary.speed.calls} model call
+              {summary.speed.calls === 1 ? "" : "s"}
+            </div>
+          )}
           <div className="mt-2">
             <CostRow label="Agent" costUsd={summary.agentUsd} />
             {summary.subagentUsd > 0 && (

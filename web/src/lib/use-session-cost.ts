@@ -21,6 +21,22 @@ export interface CostEntry {
   listPriceUsd?: number;
 }
 
+/**
+ * How fast the model produced output, over the whole response.
+ *
+ * Mirrors `SpeedStats` in `server/src/cost/tokens-per-second.ts` — the two are
+ * declared separately because the web bundle must not import server code, the
+ * same way `CostEntry` duplicates the ledger's row shape.
+ */
+export interface SpeedStats {
+  /** Model calls that had both output tokens and a recorded duration. */
+  calls: number;
+  outputTokens: number;
+  durationMs: number;
+  /** Null when no call qualified; hide the row rather than showing 0. */
+  tokensPerSecond: number | null;
+}
+
 export interface SessionCostSummary {
   sessionId: string;
   totalUsd: number;
@@ -31,6 +47,8 @@ export interface SessionCostSummary {
   subagentUsd: number;
   computeUsd: number;
   entries: CostEntry[];
+  /** Absent on responses from before the summary carried it. */
+  speed?: SpeedStats;
 }
 
 const EMPTY: SessionCostSummary = {
