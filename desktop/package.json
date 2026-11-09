@@ -1,6 +1,6 @@
 {
   "name": "kady-desktop",
-  "version": "0.15.0-6",
+  "version": "0.15.0-7",
   "private": true,
   "type": "module",
   "description": "Electron desktop shell for K-Dense BYOK",
